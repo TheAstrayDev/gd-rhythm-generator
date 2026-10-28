@@ -7,7 +7,7 @@
 //
 // Playability first: every gameplay object the generator placed is on a "heat" map. Before
 // a screen-wide effect (shockwave, shockline, bulge, pinch, lens circle, radial / motion
-// blur, pixelate, glitch, chromatic glitch, chromatic aberration, invert flash) goes in,
+// blur (radial only - motion blur stays on in GD and is never used), pixelate, glitch, chromatic glitch, chromatic aberration, invert flash) goes in,
 // the director looks at how much the player has to read during the effect and right after
 // it: calm -> full strength, busy -> a lighter version, very busy -> nothing. Camera moves
 // are toned down the same way.
@@ -20,7 +20,6 @@
 //   peak   : chromatic aberration on snares, bulge / pinch on downbeats, tilt swings,
 //            micro zoom punches
 //   calm   : lens circle breathing on downbeats
-//   whoosh : a 0.15 s motion blur at the start of a calm-enough drop, then fully off
 //   hits   : white background flash on kicks, line flash on snares
 // ---------------------------------------------------------------------------------------
 
@@ -163,14 +162,7 @@ void Gen::effects() {
                 .kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
             pulse(x0, laneY + 30, ch::BG, 0, 0.03, P * 0.6);
             used("drop zoom punch + shake");
-            // a very short horizontal "whoosh", fully switched off again after 0.15 s
-            if (double wf = allow(s.t0, 0.25); wf > 0) {
-                out.add(obj::ShaderMotionBlur, x0, laneY + 660).kv(key::Duration, 0.05).kv(key::ShStrength, 0.35 * wf)
-                    .kv(key::ShThickness, 0.3).kv(key::ShUseX, 1).kv(key::ShTargetY, 0).kv(key::ShUseY, 0);
-                out.add(obj::ShaderMotionBlur, x0 + v * 0.15, laneY + 660).kv(key::Duration, 0.1).kv(key::ShStrength, 0)
-                    .kv(key::ShThickness, 0).kv(key::ShUseX, 0).kv(key::ShTargetY, 0).kv(key::ShUseY, 0);
-                used("drop whoosh (motion blur)");
-            }
+
         }
 
         // ---- build-up: radial blur rising, only as strong as the gameplay allows
