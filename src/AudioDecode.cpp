@@ -1,4 +1,5 @@
 #include "AudioDecode.hpp"
+#include "Trace.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/fmod/fmod.hpp>
@@ -97,6 +98,7 @@ bool decodeSongToMono(std::string const& path, std::vector<float>& out, int& sam
 std::string resolveSongPath(int songID, int audioTrack, std::string& error) {
     if (songID > 0) {
         auto mdm = MusicDownloadManager::sharedState();
+        rgTrace("song: isSongDownloaded");
         if (!mdm->isSongDownloaded(songID)) {
             error = fmt::format("Song {} is not downloaded yet", songID);
             return "";
@@ -109,6 +111,7 @@ std::string resolveSongPath(int songID, int audioTrack, std::string& error) {
         }
         return path;
     }
+    rgTrace("song: getAudioFileName");
     std::string file = LevelTools::getAudioFileName(audioTrack);
     std::string full = CCFileUtils::sharedFileUtils()->fullPathForFilename(file.c_str(), false);
     std::error_code ec;
@@ -121,10 +124,12 @@ std::string resolveSongPath(int songID, int audioTrack, std::string& error) {
 
 std::string songDisplayName(int songID, int audioTrack) {
     if (songID > 0) {
+        rgTrace("song: getSongInfoObject");
         if (auto info = MusicDownloadManager::sharedState()->getSongInfoObject(songID)) {
             return fmt::format("{} - {} ({})", std::string(info->m_artistName), std::string(info->m_songName), songID);
         }
         return fmt::format("Song ID {}", songID);
     }
+    rgTrace("song: getAudioTitle");
     return fmt::format("{} (main track {})", LevelTools::getAudioTitle(audioTrack), audioTrack + 1);
 }

@@ -2,6 +2,7 @@
 #include <Geode/modify/EditorUI.hpp>
 
 #include "GeneratorPopup.hpp"
+#include "Trace.hpp"
 
 using namespace geode::prelude;
 
@@ -33,6 +34,11 @@ class $modify(RGEditorUI, EditorUI) {
     }
 
     void onGenerator(CCObject*) {
-        if (auto popup = GeneratorPopup::create(m_editorLayer)) popup->show();
+        rgTrace("button: create popup");
+        if (auto popup = GeneratorPopup::create(m_editorLayer)) {
+            rgTrace("button: show popup");
+            popup->show();
+            rgTrace("button: shown");
+        }
     }
 };

@@ -2,6 +2,7 @@
 
 #include "Analysis.hpp"
 #include "AudioDecode.hpp"
+#include "Trace.hpp"
 
 #include <random>
 #include <thread>
@@ -22,7 +23,9 @@ GeneratorPopup* GeneratorPopup::create(LevelEditorLayer* editor) {
 }
 
 bool GeneratorPopup::init(LevelEditorLayer* editor) {
+    rgTrace("popup: Popup::init");
     if (!Popup::init(390.f, 280.f)) return false;
+    rgTrace("popup: setTitle");
     m_editor = editor;
     this->setTitle("Rhythm Level Generator");
 
@@ -31,17 +34,20 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     m_effects = s_last.effects;
     m_clear = s_last.clear;
 
+    rgTrace("popup: song label");
     // --- song -------------------------------------------------------------------------
     m_songLabel = CCLabelBMFont::create("", "bigFont.fnt");
     m_songLabel->setPosition({size.width / 2, size.height - 52});
     m_mainLayer->addChild(m_songLabel);
 
+    rgTrace("popup: TextInput song");
     m_songInput = TextInput::create(110.f, "Song ID");
     m_songInput->setCommonFilter(CommonFilter::Uint);
     m_songInput->setPosition({80, size.height - 85});
     m_songInput->setScale(0.85f);
     m_mainLayer->addChild(m_songInput);
 
+    rgTrace("popup: buttons");
     auto setBtn = CCMenuItemSpriteExtra::create(
         ButtonSprite::create("Set", 40, true, "bigFont.fnt", "GJ_button_01.png", 28.f, 0.6f), this,
         menu_selector(GeneratorPopup::onSetSong)
@@ -62,6 +68,7 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     diffTitle->setPosition({size.width / 2, size.height - 117});
     m_mainLayer->addChild(diffTitle);
 
+    rgTrace("popup: difficulty buttons");
     float step = (size.width - 30) / rg::DIFFICULTY_COUNT;
     for (int i = 0; i < rg::DIFFICULTY_COUNT; i++) {
         auto spr = ButtonSprite::create(
@@ -89,9 +96,11 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
         lbl->setPosition({x + 16, 82});
         m_mainLayer->addChild(lbl);
     };
+    rgTrace("popup: toggles");
     addToggle("Clear level", 30, m_clear, menu_selector(GeneratorPopup::onToggleClear));
     addToggle("Effects", 150, m_effects, menu_selector(GeneratorPopup::onToggleEffects));
 
+    rgTrace("popup: seed input");
     m_seedInput = TextInput::create(110.f, "Seed");
     m_seedInput->setCommonFilter(CommonFilter::Uint);
     m_seedInput->setScale(0.75f);
@@ -111,9 +120,13 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     m_status->setPosition({size.width / 2, 16});
     m_mainLayer->addChild(m_status);
 
+    rgTrace("popup: read level song");
     auto level = m_editor->m_level;
+    rgTrace(fmt::format("popup: level={} songID={} track={}", (void*)level, level ? level->m_songID : -1, level ? level->m_audioTrack : -1));
     m_songInput->setString(level->m_songID > 0 ? std::to_string(level->m_songID) : "");
+    rgTrace("popup: refreshSongLabel");
     refreshSongLabel();
+    rgTrace("popup: init done");
     setStatus("Pick a song, a difficulty and press Generate");
     return true;
 }
@@ -126,8 +139,10 @@ void GeneratorPopup::setStatus(std::string const& text, ccColor3B color) {
 
 void GeneratorPopup::refreshSongLabel() {
     auto level = m_editor->m_level;
+    rgTrace("song: displayName");
     std::string name = songDisplayName(level->m_songID, level->m_audioTrack);
     std::string err;
+    rgTrace("song: resolvePath");
     bool ready = !resolveSongPath(level->m_songID, level->m_audioTrack, err).empty();
     m_songLabel->setString(name.c_str());
     m_songLabel->setColor(ready ? ccColor3B{120, 255, 120} : ccColor3B{255, 200, 90});
@@ -154,6 +169,7 @@ void GeneratorPopup::onSetSong(CCObject*) {
 
 void GeneratorPopup::onLibrary(CCObject*) {
     // GD's own song menu: Newgrounds search, the 2.2 Music Library and NCS browsers.
+    rgTrace("library: CustomSongLayer");
     if (auto layer = CustomSongLayer::create(this)) layer->show();
 }
 
