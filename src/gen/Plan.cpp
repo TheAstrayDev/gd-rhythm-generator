@@ -79,16 +79,10 @@ void Gen::planSegments() {
                 if ((r -= o.second) <= 0) { s.mode = o.first; break; }
             }
         }
-        int rank = s.level >= 3 ? D.peakSpeedRank : D.speedRank;
-        if (s.level == 0 && rank > 1 && s.mode == Mode::Cube) rank--;
-        // speed wanders a little between parts (never on Easy)
-        if (diff() >= 1 && i > 0 && s.level >= 1) {
-            double r = rnd();
-            if (r < 0.2) rank--;
-            else if (r > 0.8 || (s.drop && r > 0.5)) rank++;
-        }
-        rank = std::clamp(rank, 1, 4);
-        if (s.mode == Mode::Ship || s.mode == Mode::Wave) rank = std::min(rank, 3);
+        // One speed for the whole level. Every speed portal is a point where the game and the
+        // music can drift apart (by how many units early a portal fires); a single speed set
+        // at the spawn point keeps the sync exact.
+        int rank = D.speedRank;
         s.speedRank = rank;
 
         // modifiers
@@ -109,10 +103,10 @@ void Gen::planSegments() {
         modeCount[int(s.mode)]++;
     }
     // same gamemode, faster second half: a speed-up in the middle of an intense part
-    if (diff() >= 2) {
+    if (false) { // speed changes inside the level are disabled for exact sync
         for (size_t i = 1; i < segs.size(); i++) {
             auto& s = segs[i];
-            if (s.level < 2 || s.t1 - s.t0 < 15 * P || rnd() > 0.4) continue;
+            if (s.level < 2 || s.t1 - s.t0 < 15 * P || rnd() > 0.25) continue;
             int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
             if (s.speedRank >= cap) continue;
             double mid = (s.t0 + s.t1) / 2, split = -1;
@@ -242,8 +236,15 @@ void Gen::spike(double x, double y, bool pointDown, int group) {
 void Gen::portal(size_t i) {
     auto& s = segs[i];
     double x = tl.x(s.t0) + 30;
-    if (i > 0 && s.speedRank != segs[i - 1].speedRank) out.add(SPEED_PORTAL[s.speedRank], x, 45);
-    if (i == 0 && s.speedRank != 1) out.add(SPEED_PORTAL[s.speedRank], 45, 45);
+    // The timeline switches speed exactly at x(t0), the same way GD 2.2 converts music time
+    // to position (the change happens at the portal's x). The portal sits exactly there; a
+    // column of them so the player meets one at any height.
+    if (i > 0 && s.speedRank != segs[i - 1].speedRank) {
+        for (double y : {15.0, 75.0, 135.0, 195.0}) out.add(SPEED_PORTAL[s.speedRank], tl.x(s.t0), y);
+    }
+    // the level speed, set right where the player spawns (overlapping on the first frame),
+    // whatever start speed the level had saved before
+    if (i == 0) for (double y : {15.0, 75.0, 135.0}) out.add(SPEED_PORTAL[s.speedRank], 0, y);
     if (s.mirror) { out.add(obj::PortalMirrorOn, x - 30, 45); used("mirror portal"); }
     if (s.mini) { out.add(obj::PortalSizeMini, x + 45, 45); used("mini portal"); }
     if (i == 0) return;

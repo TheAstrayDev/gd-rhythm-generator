@@ -183,6 +183,23 @@ int main(int argc, char** argv) {
         if (bad) { std::printf("FAIL: %d objects with bad coordinates\n", bad); fails++; }
         if (int(objs.size()) != r.objectCount) { std::printf("FAIL: count mismatch %zu vs %d\n", objs.size(), r.objectCount); fails++; }
         if (r.objectCount < 50) { std::printf("FAIL: too few objects\n"); fails++; }
+        // sync sensitivity: if the game applied a speed portal d units off from where the
+        // timeline assumes, the timing error at any moment is d * (1/v0 - 1/v) (it telescopes,
+        // it does not grow with the number of portals). Report it for d = 16 units.
+        {
+            std::map<int, double> ups = {{200, 251.16}, {201, 311.58}, {202, 387.42}, {203, 468.0}, {1334, 576.0}};
+            std::map<long, double> stacks;
+            for (auto& ob : objs) if (ups.count(ob.id)) stacks[std::lround(ob.x)] = ups[ob.id];
+            double worst = 0;
+            int changes = 0;
+            double prev = 311.58;
+            for (auto& [x, sp] : stacks) {
+                if (std::abs(sp - prev) > 1) changes++;
+                prev = sp;
+                worst = std::max(worst, 16 * std::abs(1 / 311.58 - 1 / sp));
+            }
+            std::printf("  sync: %d speed changes, error if portals fired 16 units off: %.1f ms\n", changes, worst * 1000);
+        }
         // corridor sanity: free space between scaled wall blocks in the same column
         {
             std::map<long, std::pair<double, double>> col; // x -> (bottom wall top, top wall bottom)
