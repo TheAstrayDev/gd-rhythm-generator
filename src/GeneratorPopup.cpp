@@ -114,7 +114,7 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
 
     // --- options (toggle buttons instead of checkboxes, seed and offset with arrows) ------
     rgTrace("popup: options row");
-    auto clearBtn = textButton("Clear level", 95, "GJ_button_04.png", 0.45f, this, menu_selector(GeneratorPopup::onToggleClear));
+    auto clearBtn = textButton("Clear old gen", 95, "GJ_button_04.png", 0.45f, this, menu_selector(GeneratorPopup::onToggleClear));
     clearBtn->setTag(100);
     clearBtn->setPosition({70, 98});
     m_menu->addChild(clearBtn);
@@ -172,7 +172,7 @@ void GeneratorPopup::registerWithTouchDispatcher() {
 }
 
 bool GeneratorPopup::ccTouchBegan(CCTouch*, CCEvent*) {
-    return this->isVisible(); // swallow everything behind the window
+    return this->isVisible(); // swallow everything behind the window (not while hidden)
 }
 
 void GeneratorPopup::keyBackClicked() {
@@ -236,7 +236,21 @@ void GeneratorPopup::setSong(int songID) {
 void GeneratorPopup::onLibrary(CCObject*) {
     // GD's own song menu: song ID field, Newgrounds search, the 2.2 Music Library and NCS.
     rgTrace("library: CustomSongLayer");
-    if (auto layer = CustomSongLayer::create(this)) layer->show();
+    auto layer = CustomSongLayer::create(this);
+    if (!layer) return;
+    // GD shows it below our window, so step aside until it is closed
+    this->setVisible(false);
+    layer->show();
+    m_songLayer = layer;
+    this->schedule(schedule_selector(GeneratorPopup::checkSongLayer), 0.2f);
+}
+
+void GeneratorPopup::checkSongLayer(float) {
+    if (m_songLayer && m_songLayer->getParent()) return;
+    this->unschedule(schedule_selector(GeneratorPopup::checkSongLayer));
+    m_songLayer = nullptr;
+    this->setVisible(true);
+    refreshSongLabel();
 }
 
 void GeneratorPopup::songIDChanged(int id) {
@@ -370,10 +384,12 @@ void GeneratorPopup::applyResult(rg::GenResult const& res) {
         return;
     }
     if (s_last.clear) {
-        rgTrace("apply: clear");
-        std::vector<GameObject*> old;
-        for (auto obj : CCArrayExt<GameObject*>(m_editor->m_objects)) old.push_back(obj);
-        for (auto obj : old) m_editor->removeObject(obj, true);
+        // Let GD walk its own object list: reading m_objects through the fresh 2.2091
+        // bindings returned garbage pointers and crashed in removeObject.
+        for (int id : rg::generatedObjectIds()) {
+            rgTrace(fmt::format("apply: clear type {}", id));
+            m_editor->removeAllObjectsOfType(id);
+        }
     }
     rgTrace(fmt::format("apply: createObjectsFromString ({} objects)", res.objectCount));
     m_editor->createObjectsFromString(res.objects, true, true);

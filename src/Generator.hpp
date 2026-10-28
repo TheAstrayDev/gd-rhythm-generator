@@ -35,4 +35,7 @@ struct GenResult {
 
 GenResult generate(Analysis const& a, GenOptions const& opt);
 
+// Every object ID the generator can place (used to remove a previous generation).
+std::vector<int> generatedObjectIds();
+
 } // namespace rg

@@ -42,6 +42,7 @@ protected:
     void checkDownload(float);
     void startDecode(float);
     void checkWorker(float);
+    void checkSongLayer(float);
     void applyResult(rg::GenResult const& res);
 
     void setSong(int songID);
@@ -64,6 +65,7 @@ protected:
     cocos2d::CCLabelBMFont* m_status = nullptr;
     std::vector<ButtonSprite*> m_diffSprites;
     std::shared_ptr<Job> m_job;
+    geode::Ref<cocos2d::CCNode> m_songLayer = nullptr;
     bool m_busy = false;
     float m_downloadWait = 0;
 };

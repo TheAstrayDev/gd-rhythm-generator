@@ -396,70 +396,167 @@ void Gen::portal(size_t i) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Cube: path-first generation. Simulate the intended clicks, then place hazards only
-// where the simulated player is guaranteed to be clear of them.
+// Cube: path-first generation driven by per-bar rhythm patterns.
+// Each bar picks a pattern (jumps, orb hops, pad launches, stairs, pillar runs ...) whose
+// clicks sit on beats / off-beats. The player path is simulated from those clicks, then
+// platforms are built where the path lands and hazards are placed only where the simulated
+// player is guaranteed to clear them.
 // ---------------------------------------------------------------------------------------
+
+namespace {
+enum ActType { Jump, OrbYellowAct, OrbPinkAct, PadAct };
+struct Act { double t; ActType type; int land; }; // land: target surface height in blocks
+struct Arc { double t0, y0, v0, tEnd; bool risky; };
+struct Flight { std::vector<Arc> arcs; double startH, landH; bool special; };
+struct Pillar { double x0, x1, h, t; };
+
+double yOf(Arc const& r, double t) {
+    double d = t - r.t0;
+    return r.y0 + r.v0 * d - 0.5 * CUBE_G * d * d;
+}
+// time until an arc starting at y0 with velocity v0 comes down to height h
+double fallTime(double y0, double v0, double h) {
+    double disc = v0 * v0 + 2 * CUBE_G * (y0 - h);
+    if (disc < 0) disc = 0;
+    return (v0 + std::sqrt(disc)) / CUBE_G;
+}
+} // namespace
 
 void Gen::genCube(size_t si) {
     auto& s = segs[si];
     double v = SPEED_UPS[s.speedRank];
+    double P = beatLen();
     double a = s.t0 + 0.45, b = s.t1 - 0.6;
     if (b <= a) return;
-    int sub = int(O.difficulty) >= int(Difficulty::Insane) ? 4 : 2;
-    auto ev = pick(candidates(s, a, b, sub), targetCount(s, a, b), std::max(D.minGap, 0.12));
+    int diff = int(O.difficulty);
 
-    struct Arc { double t0, y0, v0, tEnd; bool risky; };
-    std::vector<std::vector<Arc>> flights;
-    double lastAction = -1e9;
-    auto landTime = [](double y0, double v0) { return (v0 + std::sqrt(v0 * v0 + 2 * CUBE_G * y0)) / CUBE_G; };
-    auto yOf = [](Arc const& r, double t) { double d = t - r.t0; return r.y0 + r.v0 * d - 0.5 * CUBE_G * d * d; };
+    // ---- 1. choose a rhythm pattern for every bar --------------------------------------
+    std::vector<Act> acts;
+    int lastTpl = -1;
+    for (size_t k = 0; k < beats.size(); k++) {
+        if (!down[k] || beats[k] < a - P || beats[k] > b) continue;
+        double T[4], H[4];
+        for (int i = 0; i < 4; i++) T[i] = beats[k] + i * P, H[i] = T[i] + P / 2;
+        float halfOn = std::max(A.onsetAt(mt(H[0]), 0.04), A.onsetAt(mt(H[2]), 0.04));
+        double hf = 0.35 + halfOn; // off-beat patterns mostly when the music has off-beats
+        bool fastOk = P >= 0.45;   // a full jump fits in one beat
+        int lv = s.level;
 
-    for (auto& e : ev) {
-        bool airborne = !flights.empty() && e.t < flights.back().back().tEnd;
-        if (!airborne) {
-            double land = flights.empty() ? -1e9 : flights.back().back().tEnd;
-            if (e.t < land + 0.06) continue;
-            bool pad = D.pads && e.down && e.w > 0.75f && s.level >= 1 && rnd() < 0.3;
-            double v0 = CUBE_V * (pad ? PAD_YELLOW : 1.0);
-            if (pad) {
-                int g = chunkGroup(si, e.t, tl.x(e.t), false);
-                out.add(obj::PadYellow, tl.x(e.t) + 22, 4).group(g);
-            } else {
-                clicks++;
-            }
-            flights.push_back({{e.t, 0, v0, e.t + landTime(0, v0), pad}});
-        } else if (D.orbs && e.t - lastAction >= std::max(0.14, D.minGap)) {
-            auto& cur = flights.back().back();
-            double y = yOf(cur, e.t);
-            if (y < 25 || y > 150) continue;
-            bool pink = y > 80 || rnd() < 0.25;
-            double v0 = CUBE_V * (pink ? ORB_PINK : ORB_YELLOW);
-            double x = tl.x(e.t);
-            int g = chunkGroup(si, e.t, x, true);
-            out.add(pink ? obj::OrbPink : obj::OrbYellow, x, y + PLAYER_HALF).group(g);
-            cur.tEnd = e.t;
-            flights.back().push_back({e.t, y, v0, e.t + landTime(y, v0), true});
-            clicks++;
-        } else {
-            continue;
+        struct Tpl { double w; std::vector<Act> acts; };
+        std::vector<Tpl> tpl = {
+            /*0 two jumps    */ {lv == 0 ? 2.0 : 0.8, {{T[0], Jump, 0}, {T[2], Jump, 0}}},
+            /*1 every beat   */ {fastOk ? (lv >= 1 ? 1.2 : 0.4) : 0.0,
+                                 {{T[0], Jump, 0}, {T[1], Jump, 0}, {T[2], Jump, 0}, {T[3], Jump, 0}}},
+            /*2 orb hop      */ {D.orbs ? 1.3 * hf : 0.0,
+                                 {{T[0], Jump, 0}, {H[0], OrbYellowAct, 0}, {T[2], Jump, 0}, {H[2], OrbPinkAct, 0}}},
+            /*3 pad + orb    */ {D.orbs && D.pads && lv >= 1 ? 1.1 : 0.0,
+                                 {{T[0], PadAct, 0}, {T[1], OrbYellowAct, 0}, {T[3], Jump, 0}}},
+            /*4 stairs       */ {diff >= 1 ? 0.9 : 0.5,
+                                 diff >= 1 ? std::vector<Act>{{T[0], Jump, 1}, {T[1], Jump, 2}, {T[2], Jump, 1}, {T[3], Jump, 0}}
+                                           : std::vector<Act>{{T[0], Jump, 1}, {T[2], Jump, 0}}},
+            /*5 orb to step  */ {D.orbs ? 0.9 * hf : 0.0, {{T[0], Jump, 0}, {H[0], OrbYellowAct, 1}, {T[2], Jump, 0}}},
+            /*6 orb chain    */ {diff >= 2 && lv >= 2 ? 1.0 * hf : 0.0,
+                                 {{T[0], Jump, 0}, {H[0], OrbYellowAct, 0}, {T[1], OrbPinkAct, 0}, {H[1], OrbYellowAct, 0}, {T[3], Jump, 0}}},
+            /*7 rest         */ {lv == 0 ? 1.5 : 0.15, {{T[0], Jump, 0}}},
+            /*8 pillar run   */ {diff >= 1 && fastOk ? 1.0 : 0.0,
+                                 {{T[0], Jump, 1}, {T[1], Jump, 1}, {T[2], Jump, 1}, {T[3], Jump, 0}}},
+            /*9 pad to tower */ {D.pads && diff >= 1 ? 0.7 : 0.0, {{T[0], PadAct, 2}, {T[2], Jump, 0}}},
+        };
+        double total = 0;
+        for (size_t i = 0; i < tpl.size(); i++) if (int(i) != lastTpl) total += tpl[i].w;
+        double r = rnd() * total;
+        int pickI = 0;
+        for (size_t i = 0; i < tpl.size(); i++) {
+            if (int(i) == lastTpl || tpl[i].w <= 0) continue;
+            pickI = int(i);
+            if ((r -= tpl[i].w) <= 0) break;
         }
-        lastAction = e.t;
+        lastTpl = pickI;
+        for (auto& act : tpl[size_t(pickI)].acts) if (act.t >= a && act.t <= b) acts.push_back(act);
     }
+    std::sort(acts.begin(), acts.end(), [](auto& l, auto& r) { return l.t < r.t; });
 
-    // hazards under every flight
+    // ---- 2. simulate the player through the clicks -----------------------------------
+    std::vector<Flight> flights;
+    std::vector<Pillar> pillars;
+    double surf = 0, lastLand = -1e9;
+    bool flying = false;
+    auto land = [&]() {
+        auto& f = flights.back();
+        flying = false;
+        surf = f.landH;
+        lastLand = f.arcs.back().tEnd;
+        if (surf > 0) pillars.push_back({tl.x(lastLand) + 5, 1e18, surf, lastLand});
+    };
+    for (auto& act : acts) {
+        if (flying && act.t >= flights.back().arcs.back().tEnd) land();
+        bool fromGround = act.type == Jump || act.type == PadAct;
+        if (fromGround) {
+            if (flying || act.t < lastLand + 0.06) continue;
+            bool pad = act.type == PadAct;
+            double v0 = CUBE_V * (pad ? PAD_YELLOW : 1.0);
+            double apex = surf + v0 * v0 / (2 * CUBE_G);
+            double target = act.land * 30.0;
+            if (target > apex - 12) target = 0;
+            double x = tl.x(act.t);
+            if (!pillars.empty() && pillars.back().x1 > 1e17) pillars.back().x1 = x + 10;
+            if (pad) out.add(obj::PadYellow, x + 22, surf + 4).group(chunkGroup(si, act.t, x, false));
+            else clicks++;
+            flights.push_back({{{act.t, surf, v0, act.t + fallTime(surf, v0, target), pad}}, surf, target, pad});
+            flying = true;
+        } else {
+            if (!flying || !D.orbs) continue;
+            auto& f = flights.back();
+            auto& cur = f.arcs.back();
+            if (act.t - cur.t0 < 0.12) continue;
+            double y = yOf(cur, act.t);
+            if (y < 25 || y > 170) continue;
+            bool pink = act.type == OrbPinkAct;
+            double v0 = CUBE_V * (pink ? ORB_PINK : ORB_YELLOW);
+            double target = act.land * 30.0;
+            if (target > y + v0 * v0 / (2 * CUBE_G) - 12) target = 0;
+            double x = tl.x(act.t);
+            out.add(pink ? obj::OrbPink : obj::OrbYellow, x, y + PLAYER_HALF).group(chunkGroup(si, act.t, x, true));
+            cur.tEnd = act.t;
+            f.arcs.push_back({act.t, y, v0, act.t + fallTime(y, v0, target), true});
+            f.landH = target;
+            f.special = true;
+            clicks++;
+        }
+    }
+    if (flying) land();
+    if (!pillars.empty() && pillars.back().x1 > 1e17) pillars.back().x1 = tl.x(s.t1) - 45;
+
+    // ---- 3. platforms (stacked blocks) ------------------------------------------------
+    for (auto& p : pillars) {
+        for (double c = p.x0 + 15; c - 15 < p.x1; c += 30) {
+            for (double y = 15; y < p.h; y += 30) {
+                out.add(obj::Block, c, y).group(chunkGroup(si, p.t, c, false));
+            }
+        }
+    }
+    auto inPillar = [&](double sx) {
+        for (auto& p : pillars) {
+            double right = p.x0 + 30 * std::ceil((p.x1 - p.x0) / 30.0);
+            if (sx + 15 > p.x0 - 2 && sx - 15 < right + 2) return true;
+        }
+        return false;
+    };
+
+    // ---- 4. hazards under every flight ----------------------------------------------
     for (auto& fl : flights) {
-        double ft0 = fl.front().t0, ft1 = fl.back().tEnd;
+        double ft0 = fl.arcs.front().t0, ft1 = fl.arcs.back().tEnd;
         double fx0 = tl.x(ft0);
-        auto yAtX = [&](double px, double& need) {
+        auto yAtX = [&](double px, double& extra) {
             double t = ft0 + (px - fx0) / v;
-            if (t <= ft0 || t >= ft1) { need = 0; return 0.0; }
-            for (auto& r : fl) {
+            extra = 0;
+            if (t <= ft0 || t >= ft1) return 0.0;
+            for (auto& r : fl.arcs) {
                 if (t >= r.t0 && t <= r.tEnd) {
-                    need = r.risky ? 18 : 0;
+                    extra = r.risky ? 18 : 0;
                     return std::max(0.0, yOf(r, t));
                 }
             }
-            need = 0;
             return 0.0;
         };
         auto safe = [&](double sx, double top, double half) {
@@ -471,33 +568,25 @@ void Gen::genCube(size_t si) {
             }
             return true;
         };
-        // collect safe intervals for spike centers
         std::vector<std::pair<double, double>> iv;
         double xs = fx0, xe = tl.x(ft1);
         bool in = false;
         double st = 0;
         for (double sx = xs; sx <= xe; sx += 2) {
-            bool ok = safe(sx, SPIKE_TOP, SPIKE_HALF);
+            bool ok = safe(sx, SPIKE_TOP, SPIKE_HALF) && !inPillar(sx);
             if (ok && !in) in = true, st = sx;
             if (!ok && in) in = false, iv.push_back({st, sx - 2});
         }
         if (in) iv.push_back({st, xe});
 
-        bool chain = fl.size() > 1 || fl.front().risky;
+        bool pit = fl.special || fl.startH > 0 || fl.landH > 0;
         for (auto& [l, r] : iv) {
             int fit = int(std::floor((r - l) / 30.0)) + 1;
-            int n;
-            if (chain) n = std::min(fit, 14);
-            else {
-                int want = 1 + int(rnd() * D.maxSpikes);
-                n = std::min(fit, want);
-            }
+            int n = pit ? std::min(fit, 16) : std::min(fit, 1 + int(rnd() * D.maxSpikes));
             double c = (l + r) / 2;
             double tMid = ft0 + (c - fx0) / v;
-            if (!chain && n == 1 && int(O.difficulty) >= int(Difficulty::Hard) && rnd() < 0.25 &&
-                safe(c, 30, 15)) {
-                int g = chunkGroup(si, tMid, c, false);
-                out.add(obj::Block, c, 15).group(g);
+            if (!pit && n == 1 && diff >= 2 && rnd() < 0.25 && safe(c, 30, 15)) {
+                out.add(obj::Block, c, 15).group(chunkGroup(si, tMid, c, false));
                 continue;
             }
             for (int k = 0; k < n; k++) {
@@ -846,6 +935,14 @@ GenResult Gen::run() {
 }
 
 } // namespace
+
+std::vector<int> generatedObjectIds() {
+    std::vector<int> ids = {obj::Block, obj::Spike, obj::PadYellow, obj::OrbYellow, obj::OrbPink,
+                            obj::PortalCube, obj::PortalShip, obj::PortalBall, obj::PortalWave, obj::PortalSpider,
+                            obj::TrigColor, obj::TrigMove, obj::TrigPulse, obj::TrigAlpha, obj::TrigShake, obj::TrigCamRotate};
+    for (int id : SPEED_PORTAL) ids.push_back(id);
+    return ids;
+}
 
 GenResult generate(Analysis const& a, GenOptions const& opt) {
     Gen g(a, opt);
