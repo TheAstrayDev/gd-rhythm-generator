@@ -68,6 +68,9 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     m_menu->setAnchorPoint({0, 0});
     m_menu->setPosition({0, 0});
     m_main->addChild(m_menu, 10);
+    // set before the menu registers itself (on enter): handlers added during a touch are
+    // queued by cocos, so changing the priority afterwards finds no handler and crashes
+    m_menu->setTouchPriority(TOUCH_PRIO - 1);
 
     auto title = CCLabelBMFont::create("Rhythm Level Generator", "goldFont.fnt");
     title->setScale(0.75f);
@@ -162,8 +165,6 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
 void GeneratorPopup::show() {
     auto scene = CCDirector::sharedDirector()->getRunningScene();
     scene->addChild(this, 1000);
-    // the menu must win over our swallowing layer
-    m_menu->setHandlerPriority(TOUCH_PRIO - 1);
 }
 
 void GeneratorPopup::registerWithTouchDispatcher() {
