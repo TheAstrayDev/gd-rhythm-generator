@@ -19,7 +19,8 @@
 //   build  : radial blur and zoom rising into the drop, eighth-note line flashes
 //   peak   : chromatic aberration on snares, bulge / pinch on downbeats, tilt swings,
 //            micro zoom punches
-//   calm   : lens circle breathing on downbeats, motion blur on long notes
+//   calm   : lens circle breathing on downbeats
+//   whoosh : a 0.15 s motion blur at the start of a calm-enough drop, then fully off
 //   hits   : white background flash on kicks, line flash on snares
 // ---------------------------------------------------------------------------------------
 
@@ -162,6 +163,14 @@ void Gen::effects() {
                 .kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
             pulse(x0, laneY + 30, ch::BG, 0, 0.03, P * 0.6);
             used("drop zoom punch + shake");
+            // a very short horizontal "whoosh", fully switched off again after 0.15 s
+            if (double wf = allow(s.t0, 0.25); wf > 0) {
+                out.add(obj::ShaderMotionBlur, x0, laneY + 660).kv(key::Duration, 0.05).kv(key::ShStrength, 0.35 * wf)
+                    .kv(key::ShThickness, 0.3).kv(key::ShUseX, 1).kv(key::ShTargetY, 0).kv(key::ShUseY, 0);
+                out.add(obj::ShaderMotionBlur, x0 + v * 0.15, laneY + 660).kv(key::Duration, 0.1).kv(key::ShStrength, 0)
+                    .kv(key::ShThickness, 0).kv(key::ShUseX, 0).kv(key::ShTargetY, 0).kv(key::ShUseY, 0);
+                used("drop whoosh (motion blur)");
+            }
         }
 
         // ---- build-up: radial blur rising, only as strong as the gameplay allows
@@ -231,13 +240,6 @@ void Gen::effects() {
                 shaderPulse(obj::ShaderLensCircle, px, laneY + 630, v * 0.02, P * 1.5,
                             {{key::PlayerCenter, 1}, {key::ShStrength, 0.35}, {key::ShWidth, 260}}, {{key::ShStrength, 0}});
                 used("lens breathing");
-            }
-            double sus = sustainAt(t);
-            if (lv <= 1 && sus > 1.5 * P && allow(t, sus) >= 1) {
-                out.add(obj::ShaderMotionBlur, px, laneY + 660).kv(key::Duration, P * 0.5).kv(key::ShStrength, 0.25)
-                    .kv(key::ShThickness, 1).kv(key::ShUseX, 1);
-                out.add(obj::ShaderMotionBlur, tl.x(t + sus), laneY + 660).kv(key::Duration, P * 0.5).kv(key::ShStrength, 0);
-                used("motion blur long note");
             }
         }
 

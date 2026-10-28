@@ -245,6 +245,16 @@ void Gen::portal(size_t i) {
     // the level speed, set right where the player spawns (overlapping on the first frame),
     // whatever start speed the level had saved before
     if (i == 0) for (double y : {15.0, 75.0, 135.0}) out.add(SPEED_PORTAL[s.speedRank], 0, y);
+    // Safety net: the same speed again every 4 bars. A portal of the current speed does
+    // nothing, but if the spawn portal / start speed were not applied, the first of these
+    // fixes the speed early, leaving a small constant offset instead of a growing drift.
+    if (i == 0) {
+        double P = beatLen();
+        for (double t = 0.15; t < segs.back().t1; t += t < 1 ? 16 * P - 0.15 : 16 * P) {
+            for (double y : {15.0, 75.0, 135.0, 195.0}) out.add(SPEED_PORTAL[s.speedRank], tl.x(t), y);
+        }
+        used("speed safety portals");
+    }
     if (s.mirror) { out.add(obj::PortalMirrorOn, x - 30, 45); used("mirror portal"); }
     if (s.mini) { out.add(obj::PortalSizeMini, x + 45, 45); used("mini portal"); }
     if (i == 0) return;
