@@ -8,6 +8,9 @@
 
 using namespace geode::prelude;
 
+// remembered between popups for the current game session
+static struct { int difficulty = 2; bool clear = true; bool effects = true; } s_last;
+
 GeneratorPopup* GeneratorPopup::create(LevelEditorLayer* editor) {
     auto ret = new GeneratorPopup();
     if (ret->init(editor)) {
@@ -24,9 +27,9 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     this->setTitle("Rhythm Level Generator");
 
     auto const size = m_size;
-    m_difficulty = std::clamp(int(Mod::get()->getSavedValue<int64_t>("difficulty", 2)), 0, rg::DIFFICULTY_COUNT - 1);
-    m_effects = Mod::get()->getSavedValue<bool>("effects", true);
-    m_clear = Mod::get()->getSavedValue<bool>("clear", true);
+    m_difficulty = s_last.difficulty;
+    m_effects = s_last.effects;
+    m_clear = s_last.clear;
 
     // --- song -------------------------------------------------------------------------
     m_songLabel = CCLabelBMFont::create("", "bigFont.fnt");
@@ -177,22 +180,17 @@ void GeneratorPopup::onDifficulty(CCObject* sender) {
     for (int i = 0; i < int(m_diffSprites.size()); i++) {
         m_diffSprites[i]->updateBGImage(i == m_difficulty ? "GJ_button_01.png" : "GJ_button_04.png");
     }
-    Mod::get()->setSavedValue<int64_t>("difficulty", m_difficulty);
+    s_last.difficulty = m_difficulty;
 }
 
 void GeneratorPopup::onToggleClear(CCObject*) {
     m_clear = !m_clear;
-    Mod::get()->setSavedValue("clear", m_clear);
+    s_last.clear = m_clear;
 }
 
 void GeneratorPopup::onToggleEffects(CCObject*) {
     m_effects = !m_effects;
-    Mod::get()->setSavedValue("effects", m_effects);
-}
-
-void GeneratorPopup::onClose(CCObject* sender) {
-    this->unscheduleAllSelectors();
-    Popup::onClose(sender);
+    s_last.effects = m_effects;
 }
 
 void GeneratorPopup::onGenerate(CCObject*) {

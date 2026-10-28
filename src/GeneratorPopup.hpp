@@ -23,7 +23,6 @@ protected:
     void onToggleClear(cocos2d::CCObject*);
     void onToggleEffects(cocos2d::CCObject*);
     void onGenerate(cocos2d::CCObject*);
-    void onClose(cocos2d::CCObject*) override;
 
     void checkDownload(float);
     void startDecode(float);
