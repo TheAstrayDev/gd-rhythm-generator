@@ -1,21 +1,26 @@
 #include "Common.hpp"
 
-#include <array>
-
 // ---------------------------------------------------------------------------------------
-// Effects director. The level's colour palette is never changed (no colour triggers, no
-// hue / grayscale / sepia grading, objects keep their colours); hits only flash white. Triggers are used for motion and camera, always in sync
-// and always fair:
+// Effects director. Uses the whole trigger / shader toolbox EXCEPT colour grading: the
+// level palette and object colours never change (no colour triggers, no hue / grayscale /
+// sepia); hits only flash white.
 //
-//   entrances : every half-bar chunk of obstacles is hidden off-screen (instant move) and
-//               flies into place ON a beat / eighth right in front of the player, finishing
-//               at least 0.3 s before the player reaches it. Each part has its own motion
-//               theme (rise, drop, slide, swing, stagger) so parts feel different.
-//   exits     : what the player has passed collapses down and fades out behind them
-//   corridors : walls breathe open on downbeats (never narrower than designed)
-//   camera    : zoom out for flying parts, zoom punch + shake on drops, small tilt swings
-//               on peaks, shockwave on drops, radial blur rising into drops
-//   deco      : translucent non-solid skyline that spins on beats and bounces on kicks
+// Playability first: every gameplay object the generator placed is on a "heat" map. Before
+// a screen-wide effect (shockwave, shockline, bulge, pinch, lens circle, radial / motion
+// blur, pixelate, glitch, chromatic glitch, chromatic aberration, invert flash) goes in,
+// the director looks at how much the player has to read during the effect and right after
+// it: calm -> full strength, busy -> a lighter version, very busy -> nothing. Camera moves
+// are toned down the same way.
+//
+//   song   : intro vignette opening, outro vignette closing
+//   part   : framing zoom (flying parts zoom out), transition burst (pixelate / glitch /
+//            chromatic glitch, rotating), entrances / exits of obstacles, breathing walls
+//   drop   : shockwave or shockline sweep, zoom punch, shake, invert flash (biggest drop)
+//   build  : radial blur and zoom rising into the drop, eighth-note line flashes
+//   peak   : chromatic aberration on snares, bulge / pinch on downbeats, tilt swings,
+//            micro zoom punches
+//   calm   : lens circle breathing on downbeats, motion blur on long notes
+//   hits   : white background flash on kicks, line flash on snares
 // ---------------------------------------------------------------------------------------
 
 namespace rg::gen {
@@ -29,14 +34,57 @@ void Gen::effects() {
     const double laneY = 600;
     int dif = diff();
 
-    out.add(obj::ShaderOptions, 1, laneY + 270);
+    // ---- heat map --------------------------------------------------------------------
+    auto heat = out.heat;
+    std::sort(heat.begin(), heat.end());
+    std::vector<double> hx, hw{0};
+    for (auto& [x, w] : heat) hx.push_back(x), hw.push_back(hw.back() + w);
+    auto heatIn = [&](double x0, double x1) {
+        size_t i0 = size_t(std::lower_bound(hx.begin(), hx.end(), x0) - hx.begin());
+        size_t i1 = size_t(std::upper_bound(hx.begin(), hx.end(), x1) - hx.begin());
+        return hw[i1] - hw[i0];
+    };
+    // 0 = nothing to read, 1 = dense: what the player faces during [t, t + dur] and 0.6 s after
+    auto busy = [&](double t, double dur) {
+        double x0 = tl.x(t), x1 = tl.x(t + dur + 0.6);
+        double perHundred = heatIn(x0, x1) / std::max(30.0, x1 - x0) * 100;
+        return std::clamp(perHundred / 1.6, 0.0, 1.0);
+    };
+    // strength factor for a screen-wide effect: 1 when calm, lighter when busy, 0 when dense
+    auto allow = [&](double t, double dur) {
+        double b = busy(t, dur);
+        return b < 0.35 ? 1.0 : b < 0.6 ? 0.45 : 0.0;
+    };
 
-    auto pulse = [&](double x, double y, int channel, std::array<int, 3> c, double in, double hold, double fade) {
-        out.add(obj::TrigPulse, x, y).kv(key::Red, c[0]).kv(key::Green, c[1]).kv(key::Blue, c[2])
+    auto pulse = [&](double x, double y, int channel, double in, double hold, double fade) {
+        out.add(obj::TrigPulse, x, y).kv(key::Red, 255).kv(key::Green, 255).kv(key::Blue, 255)
             .kv(key::FadeIn, in).kv(key::Hold, hold).kv(key::FadeOut, fade)
             .kv(key::PulseMode, 0).kv(key::PulseTargetType, 0).kv(key::TargetGroup, channel);
     };
-    // the biggest drop gets the strongest treatment
+    // a shader that snaps to a value, then tweens back
+    auto shaderPulse = [&](int id, double x, double y, double backAfter, double fadeBack,
+                           std::initializer_list<std::pair<int, double>> on,
+                           std::initializer_list<std::pair<int, double>> off) {
+        auto& o1 = out.add(id, x, y).kv(key::Duration, 0);
+        for (auto& [k, val] : on) o1.kv(k, val);
+        auto& o2 = out.add(id, x + backAfter, y).kv(key::Duration, fadeBack);
+        for (auto& [k, val] : off) o2.kv(k, val);
+    };
+
+    out.add(obj::ShaderOptions, 1, laneY + 270);
+
+    // ---- song intro / outro: vignette opens and closes ------------------------------
+    {
+        out.add(obj::ShaderLensCircle, 1, laneY + 630).kv(key::PlayerCenter, 1).kv(key::Duration, 0)
+            .kv(key::ShStrength, 1).kv(key::ShWidth, 120);
+        out.add(obj::ShaderLensCircle, 3, laneY + 630).kv(key::PlayerCenter, 1).kv(key::Duration, 4 * P)
+            .kv(key::ShStrength, 0).kv(key::ShWidth, 600).kv(key::Easing, ease::SineOut);
+        double te = segs.back().t1;
+        out.add(obj::ShaderLensCircle, tl.x(te - 3 * P), laneY + 630).kv(key::PlayerCenter, 1)
+            .kv(key::Duration, 3 * P).kv(key::ShStrength, 1).kv(key::ShWidth, 120).kv(key::Easing, ease::SineInOut);
+        used("vignette intro / outro");
+    }
+
     size_t biggest = 0;
     float bestE = -1;
     for (size_t i = 0; i < segs.size(); i++) {
@@ -45,179 +93,176 @@ void Gen::effects() {
         if (e > bestE) bestE = e, biggest = i;
     }
 
-    // motion theme per part (two styles: one for low objects, one for high objects)
     std::vector<std::pair<Motion, Motion>> theme(segs.size());
     for (size_t i = 0; i < segs.size(); i++) {
         Motion lo = Motion(rndInt(MOTION_COUNT));
-        if (lo == Drop) lo = Rise; // ground hazards come from below or ahead
+        if (lo == Drop) lo = Rise;
         Motion hi = Motion(rndInt(MOTION_COUNT));
         if (hi == Rise) hi = Drop;
         theme[i] = {lo, hi};
     }
 
+    int transitionKind = 0;
     for (size_t i = 0; i < segs.size(); i++) {
         auto& s = segs[i];
         double x0 = tl.x(s.t0);
         double v = SPEED_UPS[s.speedRank];
         int lv = s.level;
         bool flying = s.mode == Mode::Ship || s.mode == Mode::Wave;
-
-        // ---- camera framing per part
         double baseZoom = flying ? 0.92 : 1.0;
         out.add(obj::TrigZoom, x0, laneY + 330).kv(key::Zoom, baseZoom).kv(key::Duration, P).kv(key::Easing, ease::InOut);
-        if (flying) used("zoom out for flying parts");
 
-        // ---- drop
+        // ---- transition burst at the start of a part (gameplay starts a moment later)
+        if (i > 0 && s.mode != segs[i - 1].mode) {
+            double f = allow(s.t0, 0.3);
+            if (f > 0) {
+                switch (transitionKind++ % 3) {
+                    case 0:
+                        shaderPulse(obj::ShaderPixelate, x0, laneY + 270, v * 0.05, 0.3,
+                                    {{key::ShThickness, 6 * f}, {key::ShTargetY, 6 * f}}, {{key::ShThickness, 0}, {key::ShTargetY, 0}});
+                        used("pixelate transition");
+                        break;
+                    case 1:
+                        shaderPulse(obj::ShaderGlitch, x0, laneY + 270, v * 0.25, 0.15,
+                                    {{key::ShSpeed, 1.2}, {key::ShStrength, 1.5 * f}, {key::ShWidth, 6}}, {{key::ShStrength, 0}});
+                        used("glitch transition");
+                        break;
+                    default:
+                        shaderPulse(obj::ShaderChromaticGlitch, x0, laneY + 270, v * 0.2, 0.2,
+                                    {{key::ShSpeed, 1}, {key::ShStrength, 1 * f}, {key::ShThickness, 4 * f}},
+                                    {{key::ShStrength, 0}, {key::ShThickness, 0}});
+                        used("chromatic glitch transition");
+                        break;
+                }
+            }
+        }
+
+        // ---- drop: the first moments of a part are calm by construction
         if (s.drop) {
             out.add(obj::TrigShake, x0, laneY + 150).kv(key::ShakeStrength, 1 + dif / 2)
-                .kv(key::ShakeInterval, 0.02).kv(key::Duration, 0.4);
-            out.add(obj::ShaderShockwave, x0, laneY + 300).kv(key::PlayerCenter, 1).kv(key::Duration, 0.8)
-                .kv(key::ShSpeed, 1.4).kv(key::ShStrength, 2).kv(key::ShWidth, 30).kv(key::ShThickness, 12);
-            out.add(obj::TrigZoom, x0 + v * 0.01, laneY + 360).kv(key::Zoom, baseZoom * 1.08).kv(key::Duration, 0);
+                .kv(key::ShakeInterval, 0.02).kv(key::Duration, 0.35);
+            double f = allow(s.t0, 0.5);
+            if (f > 0) {
+                if (i % 2 == 0) {
+                    out.add(obj::ShaderShockwave, x0, laneY + 300).kv(key::PlayerCenter, 1).kv(key::Duration, 0.6)
+                        .kv(key::ShSpeed, 1.4).kv(key::ShStrength, 2 * f).kv(key::ShWidth, 30).kv(key::ShThickness, 12);
+                    used("drop shockwave");
+                } else {
+                    out.add(obj::ShaderShockline, x0, laneY + 300).kv(key::PlayerCenter, 1).kv(key::Duration, 0.6)
+                        .kv(key::ShSpeed, 1.5).kv(key::ShStrength, 2 * f).kv(key::ShWidth, 25).kv(key::ShThickness, 10);
+                    used("drop shockline");
+                }
+                if (i == biggest) {
+                    shaderPulse(obj::ShaderInvert, x0, laneY + 360, v * 0.05, P * 0.4, {{key::ShStrength, 1}}, {{key::ShStrength, 0}});
+                    used("invert flash");
+                }
+            }
+            out.add(obj::TrigZoom, x0 + v * 0.01, laneY + 360).kv(key::Zoom, baseZoom * 1.06).kv(key::Duration, 0);
             out.add(obj::TrigZoom, x0 + v * 0.03, laneY + 360).kv(key::Zoom, baseZoom).kv(key::Duration, P * 1.5)
                 .kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
-            used("drop shockwave + zoom punch");
+            pulse(x0, laneY + 30, ch::BG, 0, 0.03, P * 0.6);
+            used("drop zoom punch + shake");
         }
 
-        // ---- mirror section: two bars of mirrored view on an intense cube / ship part
-        if (!s.mirror && lv >= 2 && dif >= 2 && (s.mode == Mode::Cube || s.mode == Mode::Ship) && rnd() < 0.5) {
-            std::vector<double> downs;
-            for (size_t k = 0; k < beats.size(); k++)
-                if (down[k] && beats[k] > s.t0 + 2 * P && beats[k] < s.t1 - 10 * P) downs.push_back(beats[k]);
-            if (!downs.empty()) {
-                double on = downs[size_t(rndInt(int(downs.size())))], off = on + 8 * P;
-                for (double y : {45.0, 135.0, 225.0}) {
-                    out.add(obj::PortalMirrorOn, tl.x(on), y);
-                    out.add(obj::PortalMirrorOff, tl.x(off), y);
-                }
-                used("mirror section");
-            }
-        }
-
-        // ---- build-up into the next drop: radial blur rises, released on the drop
+        // ---- build-up: radial blur rising, only as strong as the gameplay allows
         if (s.build) {
-            double tr = std::max(s.t0, s.t1 - 4 * P);
-            out.add(obj::ShaderRadialBlur, tl.x(tr), laneY + 390).kv(key::PlayerCenter, 1)
-                .kv(key::Duration, s.t1 - tr).kv(key::ShStrength, 0.3).kv(key::ShWidth, 0.3).kv(key::Easing, ease::In);
+            double tb = std::max(s.t0, s.t1 - 4 * P);
+            for (double t = tb; t < s.t1 - 0.01; t += P) {
+                double u = (t - tb + P) / (s.t1 - tb);
+                out.add(obj::ShaderRadialBlur, tl.x(t), laneY + 390).kv(key::PlayerCenter, 1)
+                    .kv(key::Duration, P).kv(key::ShStrength, 0.3 * u * allow(t, P)).kv(key::ShWidth, 0.3);
+            }
             out.add(obj::ShaderRadialBlur, tl.x(s.t1), laneY + 390).kv(key::Duration, 0.1).kv(key::ShStrength, 0);
-            used("build-up radial blur");
+            out.add(obj::TrigZoom, tl.x(std::max(s.t0, s.t1 - 8 * P)), laneY + 330).kv(key::Zoom, baseZoom * 1.06)
+                .kv(key::Duration, std::min(8 * P, s.t1 - s.t0)).kv(key::Easing, ease::In);
+            for (double t = std::max(s.t0, s.t1 - 4 * P); t < s.t1 - 0.01; t += P / 2) pulse(tl.x(t), laneY + 90, ch::Line, 0, 0, P * 0.3);
+            used("build-up radial blur + zoom");
         }
 
-        // ---- peaks: tilt swings and heavy downbeats
-        if (lv >= 3 && dif >= 2) {
-            int sign = rnd() < 0.5 ? 1 : -1;
-            for (double t = s.t0; t < s.t1 - 2 * P; t += 8 * P) {
-                out.add(obj::TrigCamRotate, tl.x(t), laneY + 180).kv(key::Degrees, 2 * sign)
-                    .kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
-                sign = -sign;
-            }
-            out.add(obj::TrigCamRotate, tl.x(s.t1 - P), laneY + 180).kv(key::Degrees, 0)
-                .kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
-            int bar = 0;
-            for (size_t k = 0; k < beats.size(); k++) {
-                if (!down[k] || beats[k] < s.t0 + P || beats[k] >= s.t1 - P) continue;
-                if (bar++ % 2 == 0 && kickAt(beats[k]) > 0.6f) {
-                    out.add(obj::TrigShake, tl.x(beats[k]), laneY + 150).kv(key::ShakeStrength, 1)
-                        .kv(key::ShakeInterval, 0.02).kv(key::Duration, 0.12);
-                }
-            }
-            used("camera tilt + downbeat shake");
-        }
-
-        // ---- gamemode change burst
-        if (i > 0 && s.mode != segs[i - 1].mode) {
-            if ((s.style + int(i)) % 2 == 0) {
-                out.add(obj::ShaderGlitch, x0, laneY + 270).kv(key::Duration, 0).kv(key::ShSpeed, 1.2)
-                    .kv(key::ShStrength, 1.5).kv(key::ShWidth, 6);
-                out.add(obj::ShaderGlitch, x0 + v * 0.25, laneY + 270).kv(key::Duration, 0.15).kv(key::ShStrength, 0);
-                used("glitch transition");
-            } else {
-                out.add(obj::ShaderPixelate, x0, laneY + 270).kv(key::Duration, 0).kv(key::ShThickness, 6).kv(key::ShTargetY, 6);
-                out.add(obj::ShaderPixelate, x0 + v * 0.05, laneY + 270).kv(key::Duration, 0.3).kv(key::ShThickness, 0).kv(key::ShTargetY, 0);
-                used("pixelate transition");
-            }
-        }
-
-        // ---- biggest drop: a quick invert flash (returns to the level's own colours)
-        if (s.drop && i == biggest) {
-            out.add(obj::ShaderInvert, x0, laneY + 360).kv(key::Duration, 0).kv(key::ShStrength, 1);
-            out.add(obj::ShaderInvert, x0 + v * 0.05, laneY + 360).kv(key::Duration, P * 0.5).kv(key::ShStrength, 0);
-            used("invert flash");
-        }
-
-        // ---- hits: white flashes only (the palette itself never changes)
+        // ---- per-beat effects
+        int bar = 0;
         for (size_t k = 0; k < beats.size(); k++) {
             double t = beats[k];
             if (t < s.t0 || t >= s.t1) continue;
             double px = tl.x(t);
             float kick = kickAt(t), snare = snareAt(t);
             bool isDown = down[k];
-            if (lv == 0 && !isDown) continue;
-            if (lv >= 1 && (kick > 0.45f || isDown)) {
-                pulse(px, laneY + 30, ch::BG, {255, 255, 255}, 0, 0, P * (isDown ? 0.35 : 0.2));
+            double bz = busy(t, 0.3);
+            if (isDown) bar++;
+            // white flashes (shorter when the player is busy)
+            if ((lv >= 1 && (kick > 0.45f || isDown)) || (lv == 0 && isDown)) {
+                pulse(px, laneY + 30, ch::BG, 0, 0, P * (isDown ? 0.35 : 0.2) * (bz > 0.7 ? 0.5 : 1.0));
                 used("kick flash");
             }
-            if (lv >= 1 && snare > 0.5f && !isDown) {
-                pulse(px, laneY + 60, ch::Line, {255, 255, 255}, 0, 0, P * 0.5);
-                if (lv >= 3 && dif >= 2) {
-                    out.add(obj::ShaderChromatic, px, laneY + 480).kv(key::Duration, 0).kv(key::ShThickness, 5)
-                        .kv(key::ShTargetY, 0).kv(key::ShUseX, 1);
-                    out.add(obj::ShaderChromatic, px + v * 0.04, laneY + 480).kv(key::Duration, P * 0.4)
-                        .kv(key::ShThickness, 0).kv(key::ShUseX, 1);
-                    used("chromatic snare");
+            if (lv >= 1 && snare > 0.5f && !isDown) pulse(px, laneY + 60, ch::Line, 0, 0, P * 0.5);
+
+            if (lv >= 3) {
+                if (snare > 0.5f && !isDown && dif >= 2) {
+                    double f = allow(t, 0.2);
+                    if (f > 0) {
+                        shaderPulse(obj::ShaderChromatic, px, laneY + 480, v * 0.04, P * 0.4,
+                                    {{key::ShThickness, 4 * f}, {key::ShTargetY, 0}, {key::ShUseX, 1}},
+                                    {{key::ShThickness, 0}, {key::ShUseX, 1}});
+                        used("chromatic snare");
+                    }
+                }
+                if (isDown && dif >= 3) {
+                    if (allow(t, 0.4) >= 1) {
+                        if (bar % 2) {
+                            shaderPulse(obj::ShaderBulge, px, laneY + 510, v * 0.03, P * 0.5,
+                                        {{key::PlayerCenter, 1}, {key::ShStrength, 0.25}, {key::ShThickness, 300}}, {{key::ShStrength, 0}});
+                            used("bulge downbeat");
+                        } else {
+                            shaderPulse(obj::ShaderPinch, px, laneY + 510, v * 0.03, P * 0.5,
+                                        {{key::PlayerCenter, 1}, {key::ShStrength, 0.2}, {key::ShThickness, 300}}, {{key::ShStrength, 0}});
+                            used("pinch downbeat");
+                        }
+                    }
+                    if (bz < 0.6) {
+                        out.add(obj::TrigZoom, px, laneY + 360).kv(key::Zoom, baseZoom * 1.03).kv(key::Duration, 0);
+                        out.add(obj::TrigZoom, px + v * 0.02, laneY + 360).kv(key::Zoom, baseZoom).kv(key::Duration, P * 0.8)
+                            .kv(key::Easing, ease::ExpOut);
+                        used("micro zoom punch");
+                    }
                 }
             }
-            if (lv >= 3 && isDown && dif >= 4) {
-                out.add(obj::ShaderBulge, px, laneY + 510).kv(key::PlayerCenter, 1).kv(key::Duration, 0)
-                    .kv(key::ShStrength, 0.25).kv(key::ShThickness, 300);
-                out.add(obj::ShaderBulge, px + v * 0.03, laneY + 510).kv(key::Duration, P * 0.5).kv(key::ShStrength, 0);
-                used("bulge downbeat");
+            // calm parts: breathing vignette on downbeats, motion blur on long notes
+            if (lv == 0 && isDown && allow(t, P) >= 1) {
+                shaderPulse(obj::ShaderLensCircle, px, laneY + 630, v * 0.02, P * 1.5,
+                            {{key::PlayerCenter, 1}, {key::ShStrength, 0.35}, {key::ShWidth, 260}}, {{key::ShStrength, 0}});
+                used("lens breathing");
+            }
+            double sus = sustainAt(t);
+            if (lv <= 1 && sus > 1.5 * P && allow(t, sus) >= 1) {
+                out.add(obj::ShaderMotionBlur, px, laneY + 660).kv(key::Duration, P * 0.5).kv(key::ShStrength, 0.25)
+                    .kv(key::ShThickness, 1).kv(key::ShUseX, 1);
+                out.add(obj::ShaderMotionBlur, tl.x(t + sus), laneY + 660).kv(key::Duration, P * 0.5).kv(key::ShStrength, 0);
+                used("motion blur long note");
             }
         }
 
-        // ---- deco skyline (non-solid, above the play area) for open gamemodes
-        if (!flying) {
-            int gDeco = nextGroup++, gGlow = nextGroup++;
-            double xa = x0 + 60, xb = tl.x(s.t1) - 30;
-            int pattern = rndInt(3);
-            int n = 0;
-            for (double x = xa; x < xb; x += 90, n++) {
-                double y = 270 + (pattern == 0 ? 0 : pattern == 1 ? 20 * std::sin(n * 0.7) : (n % 2) * 30);
-                out.add(obj::Block, x, y).kv(key::Rotation, 45).kv(key::ScaleX, 0.5).kv(key::ScaleY, 0.5)
-                    .kv(key::NoTouch, 1).group(gDeco);
-                if (n % 3 == 0) {
-                    out.add(obj::Block, x + 45, y + 40).kv(key::ScaleX, 0.3).kv(key::ScaleY, 0.3)
-                        .kv(key::NoTouch, 1).group(gGlow);
-                }
+        // ---- peaks: tilt swings, skipped where the player is busy
+        if (lv >= 3 && dif >= 2) {
+            int sign = rnd() < 0.5 ? 1 : -1;
+            bool tilted = false;
+            for (double t = s.t0; t < s.t1 - 2 * P; t += 8 * P) {
+                if (busy(t, P) > 0.6) continue;
+                out.add(obj::TrigCamRotate, tl.x(t), laneY + 180).kv(key::Degrees, 2 * sign)
+                    .kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
+                sign = -sign;
+                tilted = true;
             }
-            for (int g : {gDeco, gGlow}) {
-                out.add(obj::TrigAlpha, std::max(1.0, x0 - 30), laneY + 540).kv(key::TargetGroup, g).kv(key::Duration, 0).kv(key::Opacity, 0);
-                out.add(obj::TrigAlpha, x0 + 30, laneY + 540).kv(key::TargetGroup, g).kv(key::Duration, 2 * P).kv(key::Opacity, 0.35);
-                out.add(obj::TrigAlpha, xb - v * P, laneY + 540).kv(key::TargetGroup, g).kv(key::Duration, P).kv(key::Opacity, 0);
+            if (tilted) {
+                out.add(obj::TrigCamRotate, tl.x(s.t1 - P), laneY + 180).kv(key::Degrees, 0)
+                    .kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
+                used("camera tilt");
             }
-            for (size_t k = 0; k < beats.size(); k++) {
-                double t = beats[k];
-                if (t < s.t0 + P || t >= s.t1 - P) continue;
-                if (lv == 0 && !down[k]) continue;
-                double px = tl.x(t);
-                out.add(obj::TrigRotate, px, laneY + 570).kv(key::TargetGroup, gDeco).kv(key::Degrees, 90)
-                    .kv(key::Duration, P * 0.5).kv(key::Easing, ease::BackOut).kv(key::EasingRate, 1.5);
-                if (kickAt(t) > 0.5f && lv >= 1 && t < s.t1 - 3 * P) {
-                    out.add(obj::TrigMove, px, laneY + 600).kv(key::TargetGroup, gGlow).kv(key::MoveY, 6).kv(key::Duration, 0.05);
-                    out.add(obj::TrigMove, px + v * 0.06, laneY + 600).kv(key::TargetGroup, gGlow).kv(key::MoveY, -6)
-                        .kv(key::Duration, P * 0.6).kv(key::Easing, ease::BounceOut);
-                }
-            }
-            used("deco skyline");
         }
     }
 
     // ---- obstacle entrances: hidden off-screen, arrive on an eighth in front of the player
-    std::vector<double> grid; // beats and eighths
-    for (size_t k = 0; k < beats.size(); k++) {
-        grid.push_back(beats[k]);
-        grid.push_back(beats[k] + P / 2);
-    }
+    std::vector<double> grid;
+    for (size_t k = 0; k < beats.size(); k++) grid.push_back(beats[k]), grid.push_back(beats[k] + P / 2);
     std::sort(grid.begin(), grid.end());
     static constexpr char const* names[] = {"entrance rise", "entrance drop", "entrance slide", "entrance swing"};
     for (auto& [k, c] : chunks) {
@@ -226,7 +271,6 @@ void Gen::effects() {
         double v = SPEED_UPS[s.speedRank];
         Motion m = c.dir > 0 ? theme[si].second : theme[si].first;
         double dur = std::min(0.35, P * 0.5);
-        // arrive late (it is a show) but finish >= 0.3 s before the player's front edge
         double latest = c.xMin - 30 - v * (dur + 0.3);
         double earliest = latest - v * 0.9;
         double tb = -1;
@@ -252,8 +296,6 @@ void Gen::effects() {
             .kv(key::MoveX, -dx).kv(key::MoveY, -dy).kv(key::Duration, dur)
             .kv(key::Easing, easing).kv(key::EasingRate, 2);
         used(names[m]);
-
-        // exit: collapse and fade once the player is fully past
         double exitX = c.xMax + 90;
         out.add(obj::TrigMove, exitX, laneY + 120).kv(key::TargetGroup, c.group)
             .kv(key::MoveY, -240).kv(key::Duration, 0.6).kv(key::Easing, ease::In);

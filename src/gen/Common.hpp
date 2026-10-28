@@ -124,7 +124,16 @@ public:
     std::string str;
     int count = 0;
 
+    // where gameplay objects are (x, weight): the effects director keeps the screen calm
+    // when the player has a lot to read
+    std::vector<std::pair<double, float>> heat;
+
     Out& add(int id, double x, double y) {
+        float w = id == 8 ? 1.f : id == 1 ? 0.1f : (id == 35 || id == 36 || id == 67 || id == 84 || id == 140 ||
+                  id == 141 || id == 1332 || id == 1333 || id == 1704) ? 1.5f
+                  : (id == 10 || id == 11 || id == 12 || id == 13 || id == 47 || id == 99 || id == 101 ||
+                     id == 660 || id == 1331) ? 1.f : 0.f;
+        if (w > 0) heat.push_back({x, w});
         if (m_open) str += ';';
         str += "1," + std::to_string(id) + ",2," + num(x) + ",3," + num(y);
         m_open = true;

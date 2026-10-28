@@ -3,26 +3,27 @@
 // ---------------------------------------------------------------------------------------
 // Ball / Spider: gravity flips on the music inside a living corridor.
 //
-//   flips   : clicks on strong onsets, or gravity portals placed exactly on a beat (the
-//             flip happens without a click - a surprise that is still readable)
-//   terrain : while the player is on one surface, the surface it just left shifts up or
-//             down by a block, so the corridor reshapes itself between flips; the player
-//             lands on the new height (never a wall in front of the player: a surface only
-//             changes while the player is on the opposite one)
-//   hazards : spikes on the surface the player is not supposed to be on
-//   search  : a pool of plans (flip type + terrain shift per flip), then annealing on the
-//             best plan for the most varied, best-synced playable layout
+//   flips    : clicks on onsets; sometimes a gravity portal does the flip instead. A portal
+//              only goes on a weaker hit with at least two beats of calm before and after,
+//              and both surfaces are kept free of hazards for a beat around it, so an
+//              instinctive click there can never throw the player into spikes
+//   terrain  : while the player is on one surface, the surface it just left shifts up or
+//              down by a block (never a wall in front of the player)
+//   hazards  : per flip one of several styles on the wrong surface - full spike row,
+//              spike clusters, block bumps, a short row just where the punishment matters
+//   search   : pool of plans + annealing, scored for variety and sync
 // ---------------------------------------------------------------------------------------
 
 namespace rg::gen {
 
 namespace {
+enum HazardStyle { HRow, HClusters, HBlocks, HShort, HAZARD_COUNT };
 struct Step { double t; double h; }; // surface height from time t on
-struct FlipPlan { std::vector<int> portal; std::vector<int> shift; };
+struct FlipPlan { std::vector<int> portal, shift, style; };
 struct FlipLayout {
     std::vector<Step> floor, ceil;
-    struct Spike { double t0, t1; bool ceiling; };
-    std::vector<Spike> spikes;
+    struct Hazard { double t0, t1; bool ceiling; HazardStyle style; };
+    std::vector<Hazard> hazards;
     struct Portal { double t; bool toCeil; double y; };
     std::vector<Portal> portals;
     int clicks = 0, changes = 0;
@@ -37,6 +38,7 @@ double heightAt(std::vector<Step> const& st, double t) {
 
 void Gen::genFlip(size_t si, bool spider) {
     auto& s = segs[si];
+    double P = beatLen();
     double x0 = tl.x(s.t0) + 75, x1 = tl.x(s.t1) - 15;
     double a = s.t0 + 0.55, b = s.t1 - 0.6;
     if (b <= a) return;
@@ -47,7 +49,14 @@ void Gen::genFlip(size_t si, bool spider) {
     double minGapUnits = spider ? 60 : 90;
     double ballG = 0.6 * CUBE_G;
     bool shifting = diff() >= 1;
-    bool portals = diff() >= 2;
+    bool portalsAllowed = spider ? diff() >= 2 : diff() >= 3;
+
+    // a flip may become a portal only with calm around it and on a weaker hit
+    std::vector<char> portalOk(ev.size(), 0);
+    for (size_t k = 1; k + 1 < ev.size(); k++) {
+        bool calm = ev[k].t - ev[k - 1].t >= 2 * P && ev[k + 1].t - ev[k].t >= 2 * P;
+        portalOk[k] = char(portalsAllowed && calm && ev[k].w < 0.85f);
+    }
 
     auto build = [&](FlipPlan const& pl) {
         FlipLayout L;
@@ -57,27 +66,30 @@ void Gen::genFlip(size_t si, bool spider) {
         bool onCeil = false;
         double sync = 0;
         int portalCount = 0;
-        std::set<int> gapsSeen;
-        if (!ev.empty() && ev.front().t - a > 0.6) L.spikes.push_back({a, ev.front().t - 0.05, true});
+        std::set<int> gapsSeen, stylesSeen;
+        if (!ev.empty() && ev.front().t - a > 0.6) L.hazards.push_back({a, ev.front().t - 0.05, true, HRow});
         for (size_t k = 0; k < ev.size(); k++) {
             double tk = ev[k].t;
             double tn = k + 1 < ev.size() ? ev[k + 1].t : s.t1 - 0.4;
             double tr = spider ? 0 : std::sqrt(2 * std::max(0.0, C - F - 30) / ballG);
             double late = spider ? D.spiderLate : std::max(0.19, std::min(D.ballLate, tr + 0.05));
             double early = spider ? 0.05 : 0.0;
-            bool isPortal = portals && pl.portal[k] && k > 0;
+            bool isPortal = pl.portal[k] && portalOk[k];
+            bool nextPortal = k + 1 < ev.size() && pl.portal[k + 1] && portalOk[k + 1];
             if (isPortal) {
                 L.portals.push_back({tk, !onCeil, onCeil ? C - 45 : F + 45});
                 portalCount++;
+                late = std::max(late, P); // clean zone after the portal
             } else {
                 L.clicks++;
                 sync += ev[k].w;
             }
+            if (nextPortal) early = std::max(early, P); // clean zone before the next portal
             // the surface just left may shift once the player has arrived on the other one
             int d = shifting ? pl.shift[k] : 0;
             double tShift = tk + tr + 0.1;
             if (d != 0 && tShift < tn - 0.15) {
-                if (!onCeil) { // left the floor
+                if (!onCeil) {
                     double nf = std::clamp(F + d * 30, 0.0, 90.0);
                     if (C - nf >= minGapUnits && nf != F) F = nf, L.floor.push_back({tShift, F}), L.changes++;
                 } else {
@@ -86,13 +98,15 @@ void Gen::genFlip(size_t si, bool spider) {
                 }
             }
             gapsSeen.insert(int(C - F));
-            // punish not flipping: spikes on the surface the player left
-            L.spikes.push_back({tk + late, tn - early, onCeil});
+            HazardStyle st = HazardStyle(pl.style[k]);
+            if (st == HBlocks && C - F < minGapUnits + 30) st = HRow; // bumps need the room
+            stylesSeen.insert(int(st));
+            if (tn - early > tk + late) L.hazards.push_back({tk + late, tn - early, onCeil, st});
             onCeil = !onCeil;
         }
         double portalShare = ev.empty() ? 0 : double(portalCount) / ev.size();
-        L.score = 3.0 * L.changes + 2.5 * portalCount + 1.5 * sync + 2.0 * gapsSeen.size()
-                  - (portalShare > 0.35 ? 12.0 * (portalShare - 0.35) * ev.size() : 0.0);
+        L.score = 3.0 * L.changes + 2.5 * portalCount + 1.5 * sync + 2.0 * gapsSeen.size() + 2.0 * stylesSeen.size()
+                  - (portalShare > 0.25 ? 15.0 * (portalShare - 0.25) * ev.size() : 0.0);
         return L;
     };
 
@@ -100,14 +114,15 @@ void Gen::genFlip(size_t si, bool spider) {
     auto randomPlan = [&]() {
         FlipPlan pl;
         for (size_t k = 0; k < ev.size(); k++) {
-            pl.portal.push_back(rnd() < 0.2 ? 1 : 0);
+            pl.portal.push_back(rnd() < 0.25 ? 1 : 0);
             pl.shift.push_back(rndInt(3) - 1);
+            pl.style.push_back(rndInt(HAZARD_COUNT));
         }
         return pl;
     };
     FlipPlan bestPlan = randomPlan();
     FlipLayout best = build(bestPlan);
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 24; i++) {
         auto pl = randomPlan();
         auto L = build(pl);
         if (L.score > best.score) best = std::move(L), bestPlan = pl;
@@ -115,12 +130,14 @@ void Gen::genFlip(size_t si, bool spider) {
     FlipPlan cur = bestPlan;
     double curScore = best.score;
     int improved = 0;
-    for (int r = 0; r < 120 && !ev.empty(); r++) {
-        double temp = 2.0 * (1.0 - r / 120.0);
+    for (int r = 0; r < 150 && !ev.empty(); r++) {
+        double temp = 2.0 * (1.0 - r / 150.0);
         FlipPlan pl = cur;
         size_t k = size_t(rndInt(int(ev.size())));
-        if (rnd() < 0.4) pl.portal[k] ^= 1;
-        else pl.shift[k] = rndInt(3) - 1;
+        double m = rnd();
+        if (m < 0.3) pl.portal[k] ^= 1;
+        else if (m < 0.65) pl.shift[k] = rndInt(3) - 1;
+        else pl.style[k] = rndInt(HAZARD_COUNT);
         auto L = build(pl);
         if (L.score > curScore || rnd() < std::exp((L.score - curScore) / std::max(0.05, temp))) cur = pl, curScore = L.score;
         if (L.score > best.score) best = std::move(L), bestPlan = pl, improved++;
@@ -145,19 +162,26 @@ void Gen::genFlip(size_t si, bool spider) {
         for (size_t i = 1; i < st.size(); i++) if (std::abs(tl.x(st[i].t) - x) < 35) return true;
         return false;
     };
-    for (auto& sp : best.spikes) {
-        double xa = tl.x(sp.t0) + 18, xb = tl.x(sp.t1) - 18;
-        if (sp.ceiling) xa = std::max(xa, x0);
-        for (double x = xa; x <= xb; x += 30) {
+    static char const* styleNames[] = {"spike row", "spike clusters", "block bumps", "short spike row"};
+    for (auto& hz : best.hazards) {
+        double xa = tl.x(hz.t0) + 18, xb = tl.x(hz.t1) - 18;
+        if (hz.ceiling) xa = std::max(xa, x0);
+        if (hz.style == HShort) xb = std::min(xb, xa + 90); // only where not flipping kills
+        int n = 0;
+        for (double x = xa; x <= xb; x += 30, n++) {
+            if (hz.style == HClusters && n % 4 >= 2) continue;
             double t = tAt(x);
-            if (sp.ceiling) {
-                if (changeNear(best.ceil, x)) continue;
-                spike(x, heightAt(best.ceil, t) - 15, true, chunkGroup(si, sp.t0, x, true));
+            auto& steps = hz.ceiling ? best.ceil : best.floor;
+            if (changeNear(steps, x)) continue;
+            double surf = heightAt(steps, t);
+            int g = chunkGroup(si, hz.t0, x, hz.ceiling);
+            if (hz.style == HBlocks) {
+                out.add(obj::Block, x, hz.ceiling ? surf - 15 : surf + 15).group(g);
             } else {
-                if (changeNear(best.floor, x)) continue;
-                spike(x, heightAt(best.floor, t) + 15, false, chunkGroup(si, sp.t0, x, false));
+                spike(x, hz.ceiling ? surf - 15 : surf + 15, hz.ceiling, g);
             }
         }
+        used(styleNames[hz.style]);
     }
     for (auto& p : best.portals) {
         out.add(p.toCeil ? obj::PortalGravityUp : obj::PortalGravityDown, tl.x(p.t) + 15, p.y);
