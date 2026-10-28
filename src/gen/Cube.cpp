@@ -410,6 +410,13 @@ void Gen::genCube(size_t si) {
             if (barLetter[bi] != 'A' && barLetter[bi] != 'a' && !recent.empty() && recent.back() == T.sig) score -= 4;
             if (T.plane == Ceil && lastBars) score -= 50; // must end on the floor
             if (lv == 0) score -= 2.0 * T.flips;
+            // level-wide novelty: actions the level already used a lot cost more
+            if (styleTotal > 8) {
+                for (char ch2 : T.sig) {
+                    if (ch2 >= '0' && ch2 <= '9') continue;
+                    score -= 6.0 * double(styleUse[ch2]) / styleTotal;
+                }
+            }
             return score;
         };
         // 1) pool of random candidates, keep the best
@@ -442,6 +449,7 @@ void Gen::genCube(size_t si) {
         if (accepted > 0) features["improved bars"]++;
         features["improvement steps"] += accepted;
         S = std::move(best);
+        for (char ch2 : S.sig) if (ch2 < '0' || ch2 > '9') styleUse[ch2]++, styleTotal++;
         recent.push_back(S.sig);
         if (recent.size() > 3) recent.erase(recent.begin());
     }
@@ -474,8 +482,8 @@ void Gen::genCube(size_t si) {
         if (c.x1 <= c.x0) continue;
         for (double x = c.x0; x <= c.x1; x += 30) {
             int g = chunkGroup(si, s.t0 + (x - tl.x(s.t0)) / v, x, true);
-            out.add(obj::Block, x, CEIL_Y + 15).kv(key::Color1, ch::Blocks).group(g);
-            out.add(obj::Block, x, CEIL_Y + 45).kv(key::Color1, ch::Blocks).group(g);
+            out.add(obj::Block, x, CEIL_Y + 15).group(g);
+            out.add(obj::Block, x, CEIL_Y + 45).group(g);
         }
         used("ceiling plane");
     }
@@ -490,7 +498,7 @@ void Gen::genCube(size_t si) {
     for (auto& p : S.pillars) {
         for (double c = p.x0 + 15; c - 15 < p.x1; c += 30) {
             for (double y = 15; y < p.h; y += 30) {
-                out.add(obj::Block, c, worldY(y, p.plane)).kv(key::Color1, ch::Blocks)
+                out.add(obj::Block, c, worldY(y, p.plane))
                     .group(chunkGroup(si, p.t, c, p.plane == Ceil));
             }
         }
@@ -571,7 +579,7 @@ void Gen::genCube(size_t si) {
             if (ob == ObMixed) ob = rnd() < 0.5 ? ObSpikes : ObBlocks;
             if (ob == ObSpikeBlock && safe(c, 30 + SPIKE_TOP, 15)) {
                 int g = chunkGroup(si, tMid, c, pl == Ceil);
-                out.add(obj::Block, c, worldY(15, pl)).kv(key::Color1, ch::Blocks).group(g);
+                out.add(obj::Block, c, worldY(15, pl)).group(g);
                 spike(c, worldY(45, pl), pl == Ceil, g);
                 used("spike on block");
                 continue;
@@ -581,7 +589,7 @@ void Gen::genCube(size_t si) {
                 for (int k = 0; k < nb; k++) {
                     double bx = c + (k - (nb - 1) / 2.0) * 30;
                     if (!safe(bx, 30, 15)) continue;
-                    out.add(obj::Block, bx, worldY(15, pl)).kv(key::Color1, ch::Blocks)
+                    out.add(obj::Block, bx, worldY(15, pl))
                         .group(chunkGroup(si, tMid, bx, pl == Ceil));
                 }
                 used("block obstacle");

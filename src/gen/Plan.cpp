@@ -22,7 +22,9 @@ void Gen::planSegments() {
     // the way creators switch gamemodes on phrase boundaries
     std::vector<Seg> raw;
     for (auto& s : secs) {
-        double maxLen = (s.level == 0 ? 16 : 8) * 4 * P;
+        // calm parts are long; intense parts switch every 4 bars (sometimes 2) for surprise
+        int bars = s.level == 0 ? 16 : s.level == 1 ? 8 : (diff() >= 2 && rnd() < 0.5 ? (rnd() < 0.3 ? 2 : 4) : 8);
+        double maxLen = bars * 4 * P;
         int pieces = std::max(1, int(std::round((s.end - s.start) / maxLen)));
         double len = (s.end - s.start) / pieces;
         for (int k = 0; k < pieces; k++) {
@@ -79,6 +81,13 @@ void Gen::planSegments() {
         }
         int rank = s.level >= 3 ? D.peakSpeedRank : D.speedRank;
         if (s.level == 0 && rank > 1 && s.mode == Mode::Cube) rank--;
+        // speed wanders a little between parts (never on Easy)
+        if (diff() >= 1 && i > 0 && s.level >= 1) {
+            double r = rnd();
+            if (r < 0.2) rank--;
+            else if (r > 0.8 || (s.drop && r > 0.5)) rank++;
+        }
+        rank = std::clamp(rank, 1, 4);
         if (s.mode == Mode::Ship || s.mode == Mode::Wave) rank = std::min(rank, 3);
         s.speedRank = rank;
 
@@ -185,8 +194,8 @@ float Gen::sustainAt(double t) const {
 // ---------------------------------------------------------------------------------------
 
 int Gen::chunkGroup(size_t segIdx, double t, double x, bool upper) {
-    double bar = 4 * beatLen();
-    long idx = long(std::floor((t - segs[segIdx].t0) / bar));
+    double half = 2 * beatLen(); // half-bar chunks: staggered entrances
+    long idx = long(std::floor((t - segs[segIdx].t0) / half));
     long k = (long(segIdx) << 21) | (idx << 1) | (upper ? 1 : 0);
     auto it = chunks.find(k);
     if (it == chunks.end()) {
@@ -201,7 +210,7 @@ int Gen::chunkGroup(size_t segIdx, double t, double x, bool upper) {
 }
 
 void Gen::spike(double x, double y, bool pointDown, int group) {
-    auto& o = out.add(obj::Spike, x, y).kv(key::Color1, ch::Accent);
+    auto& o = out.add(obj::Spike, x, y);
     if (pointDown) o.kv(key::Rotation, 180);
     o.group(group);
 }

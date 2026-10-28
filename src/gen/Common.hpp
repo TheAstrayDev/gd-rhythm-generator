@@ -71,11 +71,11 @@ inline constexpr int Blocks = 1, Accent = 2, Deco = 3, DecoGlow = 4;
 inline constexpr double CUBE_G = 3449.0;   // gravity
 inline constexpr double CUBE_V = 670.8;    // jump velocity  -> ~65 units high, ~0.39 s airtime
 inline constexpr double ORB_YELLOW = 1.0;  // multipliers of CUBE_V
-inline constexpr double ORB_PINK = 0.72;
-inline constexpr double ORB_RED = 1.3;
-inline constexpr double PAD_YELLOW = 1.36;
-inline constexpr double PAD_PINK = 0.95;
-inline constexpr double PAD_RED = 1.6;
+inline constexpr double ORB_PINK = 0.72;  // ~8 / 11.18
+inline constexpr double ORB_RED = 1.35;   // ~15.1 / 11.18 (GD per-tick jump velocities)
+inline constexpr double PAD_YELLOW = 1.43; // ~16 / 11.18
+inline constexpr double PAD_PINK = 0.93;   // ~10.4 / 11.18
+inline constexpr double PAD_RED = 1.79;    // ~20 / 11.18
 inline constexpr double SPIKE_TOP = 22.0;  // top of a ground spike's hitbox
 inline constexpr double SPIKE_HALF = 3.0;  // half width of a spike's hitbox
 inline constexpr double PLAYER_HALF = 15.0;
@@ -222,6 +222,8 @@ public:
     int clicks = 0;
     std::map<std::string, int> features; // what the generator used (for the summary)
     double patternSpace = 0;             // log10 of the per-bar combination count
+    std::map<char, int> styleUse;        // how often each cube action letter was used so far
+    int styleTotal = 0;
 
     double lt(double musicT) const { return musicT + O.syncOffset - O.songOffset; }
     double mt(double levelT) const { return levelT - O.syncOffset + O.songOffset; }

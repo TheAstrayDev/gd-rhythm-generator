@@ -36,11 +36,11 @@ void Gen::walls2(size_t si, std::vector<double> const& ts, std::vector<double> c
         double bottomOfTop = std::ceil((hi + gap / 2) / 7.5) * 7.5;
         if (bottomOfTop < 330) {
             double h = 360 - bottomOfTop;
-            out.add(obj::Block, xc, bottomOfTop + h / 2).kv(key::ScaleY, h / 30).kv(key::Color1, ch::Blocks).group(wg.top);
+            out.add(obj::Block, xc, bottomOfTop + h / 2).kv(key::ScaleY, h / 30).group(wg.top);
         }
         double topOfBottom = std::floor((lo - gap / 2) / 7.5) * 7.5;
         if (topOfBottom >= 22.5) {
-            out.add(obj::Block, xc, topOfBottom / 2).kv(key::ScaleY, topOfBottom / 30).kv(key::Color1, ch::Blocks).group(wg.bottom);
+            out.add(obj::Block, xc, topOfBottom / 2).kv(key::ScaleY, topOfBottom / 30).group(wg.bottom);
         }
     }
 }
@@ -74,7 +74,10 @@ void Gen::genWave(size_t si) {
     // toggle masks, then annealing on the best one. Score: toggles on strong onsets, varied
     // amplitudes (not the same zigzag every beat), no idling on the floor, density close to
     // the difficulty target.
-    double targetToggles = targetCount(s, a, b, 1.2);
+    // each wave part gets its own density: calm glide, normal, or spam on intense drops
+    double dens = s.level >= 3 && diff() >= 3 && rnd() < 0.4 ? 1.7 : 0.8 + rnd() * 0.6;
+    if (dens > 1.5) used("wave spam");
+    double targetToggles = targetCount(s, a, b, 1.2 * dens);
     double endZone = b - (yhi - ylo) / vy * 0.6;
     struct WavePath { std::vector<double> ts, ys; int toggles = 0; double score = -1e18; };
     auto build = [&](std::vector<char> const& mask) {
@@ -124,7 +127,7 @@ void Gen::genWave(size_t si) {
         mean /= std::max<size_t>(1, amps.size());
         for (double v2 : amps) var += (v2 - mean) * (v2 - mean);
         var = std::sqrt(var / std::max<size_t>(1, amps.size()));
-        w.score = 2.0 * sync + var / 12.0 - 4.0 * floorIdle - 0.6 * std::abs(w.toggles - targetToggles);
+        w.score = 2.0 * sync + var / 6.0 - 4.0 * floorIdle - 0.6 * std::abs(w.toggles - targetToggles);
         return w;
     };
     WavePath best;
@@ -304,8 +307,8 @@ void Gen::genFlip(size_t si, bool spider) {
     double C = s.corridor;
     double x0 = tl.x(s.t0) + 75, x1 = tl.x(s.t1) - 15;
     for (double x = x0; x <= x1; x += 30) {
-        out.add(obj::Block, x, C + 15).kv(key::Color1, ch::Blocks);
-        out.add(obj::Block, x, C + 45).kv(key::Color1, ch::Blocks);
+        out.add(obj::Block, x, C + 15);
+        out.add(obj::Block, x, C + 45);
     }
     double a = s.t0 + 0.55, b = s.t1 - 0.6;
     if (b <= a) return;

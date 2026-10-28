@@ -209,11 +209,33 @@ int main(int argc, char** argv) {
             if (!col.empty() && minFree < 34) { std::printf("FAIL: corridor too tight\n"); fails++; }
             if (worstRun > 12) { std::printf("FAIL: wave/ship stuck in a floor tunnel\n"); fails++; }
         }
-        // move-trigger offsets per group must cancel out
-        std::map<int, double> net;
-        for (auto& ob : objs) if (ob.id == 901) net[int(ob.kv[51])] += ob.kv[29];
+        // move-trigger offsets per group must cancel out before the player passes the group
+        // (afterwards things may collapse away behind the player)
+        std::map<int, double> groupEnd;
+        for (auto& ob : objs) {
+            if (ob.id == 901 || !ob.kv.count(57)) continue;
+            int g = int(ob.kv[57]);
+            groupEnd[g] = std::max(groupEnd.count(g) ? groupEnd[g] : -1e9, ob.x);
+        }
+        std::map<int, std::pair<double, double>> net;
+        for (auto& ob : objs) {
+            if (ob.id != 901) continue;
+            int g = int(ob.kv[51]);
+            if (groupEnd.count(g) && ob.x > groupEnd[g] + 15) continue;
+            net[g].first += ob.kv[28];
+            net[g].second += ob.kv[29];
+        }
         int nz = 0;
-        for (auto& [g, v] : net) if (std::abs(v) > 1e-6) nz++;
+        for (auto& [g, v] : net) {
+            if (std::abs(v.first) > 1e-6 || std::abs(v.second) > 1e-6) {
+                nz++;
+                std::printf("  group %d net (%.1f, %.1f), last object x=%.0f\n", g, v.first, v.second,
+                            groupEnd.count(g) ? groupEnd[g] : -1.0);
+                for (auto& ob : objs)
+                    if (ob.id == 901 && int(ob.kv[51]) == g)
+                        std::printf("    move at x=%.0f dx=%.0f dy=%.0f\n", ob.x, ob.kv[28], ob.kv[29]);
+            }
+        }
         if (nz) { std::printf("FAIL: %d groups with non-zero net move\n", nz); fails++; }
     }
     if (argc > 2) {
