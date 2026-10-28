@@ -31,7 +31,7 @@ enum Intent { IJump, IPad, IOrb, IFlip, IDash, IDrop };
 enum Obst { ObSpikes, ObBlocks, ObMixed, ObSpikeBlock };
 enum Contour { CFlat, CStairs, CHigh, CPillars, CMountain, CWalk, CCliff, CONTOUR_COUNT };
 
-constexpr double CEIL_Y = 180;     // world y of the ceiling plane's surface (6 blocks)
+constexpr double CEIL_Y = 120;     // world y of the ceiling plane's surface (4 blocks: stays on screen)
 constexpr double FLIP_PUSH = 0.35; // blue pad / orb push towards the new surface (x CUBE_V)
 constexpr int OrbBlue = 84, PadBlue = 67;
 
@@ -75,6 +75,7 @@ struct Sim {
     std::vector<Pillar> pillars;
     std::vector<Placed> placed;
     std::vector<Span> ceil;
+    std::vector<std::pair<double, bool>> flipsAt; // (time, now upside down) for the camera
     int clicks = 0;
     std::map<std::string, int> used;
     // per-bar score accumulators
@@ -176,6 +177,9 @@ void Gen::genCube(size_t si) {
     // flip gravity at time t from the current state; returns false if not possible
     auto flipAt = [&](Sim& S, double t, bool grounded) {
         if (t - S.lastFlip < 2 * P) return false;
+        // only from the ground or a low hop: a high start would clip the ceiling plane
+        if (S.plane == Floor && grounded && S.surf > 0) return false;
+        if (S.plane == Floor && !grounded && yOf(S.flights.back().arcs.back(), t) > 60) return false;
         Plane np = S.plane == Floor ? Ceil : Floor;
         double yl = 0, vl = 0;
         if (!grounded) {
@@ -207,6 +211,7 @@ void Gen::genCube(size_t si) {
         S.lastFlip = t;
         S.flips++;
         S.used[grounded ? "blue pad (plane switch)" : "blue orb (plane switch)"]++;
+        S.flipsAt.push_back({t, np == Ceil});
         return true;
     };
 
@@ -312,6 +317,8 @@ void Gen::genCube(size_t si) {
             auto& f = S.flights.back();
             auto& cur = f.arcs.back();
             if (cur.dash || c.t - cur.t0 < 0.12 || !D.orbs) { S.skipped++; continue; }
+            // in the air towards / under the ceiling plane: nothing but the way back down
+            if ((cur.plane == Ceil || f.flip) && it != IFlip) { S.skipped++; continue; }
             double y = yOf(cur, c.t);
             if (y < 25 || y > 175) { S.skipped++; continue; }
             if (it == IFlip && allowFlip && cur.plane == S.plane && flipAt(S, c.t, false)) {
@@ -320,6 +327,7 @@ void Gen::genCube(size_t si) {
                 S.sync += 1.5 * c.strength;
                 continue;
             }
+            if (cur.plane == Ceil || f.flip) { S.skipped++; continue; } // a failed way back: no orb
             if (it == IDash && allowDash && c.sustain > 0.5 * P) {
                 double hold = std::min({double(c.sustain), nextT - c.t - 0.12, 3 * P});
                 if (hold >= 0.25) {
@@ -483,6 +491,13 @@ void Gen::genCube(size_t si) {
     // ---- emit objects -----------------------------------------------------------------
     // local -> world for an object centred at local height lc on plane p
     auto worldY = [&](double lc, Plane p) { return p == Floor ? lc : CEIL_Y - lc; };
+    // camera pulls back while the cube is upside down so both planes stay in view
+    if (O.effects) {
+        for (auto& [ft, up] : S.flipsAt) {
+            out.add(obj::TrigZoom, tl.x(ft), 930).kv(key::Zoom, up ? 0.85 : 1.0).kv(key::Duration, 0.35)
+                .kv(key::Easing, ease::InOut);
+        }
+    }
     for (auto& c : S.ceil) {
         if (c.x1 <= c.x0) continue;
         for (double x = c.x0; x <= c.x1; x += 30) {

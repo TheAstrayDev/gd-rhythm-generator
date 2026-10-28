@@ -79,6 +79,21 @@ void Gen::effects() {
             used("drop shockwave + zoom punch");
         }
 
+        // ---- mirror section: two bars of mirrored view on an intense cube / ship part
+        if (!s.mirror && lv >= 2 && dif >= 2 && (s.mode == Mode::Cube || s.mode == Mode::Ship) && rnd() < 0.5) {
+            std::vector<double> downs;
+            for (size_t k = 0; k < beats.size(); k++)
+                if (down[k] && beats[k] > s.t0 + 2 * P && beats[k] < s.t1 - 10 * P) downs.push_back(beats[k]);
+            if (!downs.empty()) {
+                double on = downs[size_t(rndInt(int(downs.size())))], off = on + 8 * P;
+                for (double y : {45.0, 135.0, 225.0}) {
+                    out.add(obj::PortalMirrorOn, tl.x(on), y);
+                    out.add(obj::PortalMirrorOff, tl.x(off), y);
+                }
+                used("mirror section");
+            }
+        }
+
         // ---- build-up into the next drop: radial blur rises, released on the drop
         if (s.build) {
             double tr = std::max(s.t0, s.t1 - 4 * P);
@@ -187,7 +202,7 @@ void Gen::effects() {
                 double px = tl.x(t);
                 out.add(obj::TrigRotate, px, laneY + 570).kv(key::TargetGroup, gDeco).kv(key::Degrees, 90)
                     .kv(key::Duration, P * 0.5).kv(key::Easing, ease::BackOut).kv(key::EasingRate, 1.5);
-                if (kickAt(t) > 0.5f && lv >= 1) {
+                if (kickAt(t) > 0.5f && lv >= 1 && t < s.t1 - 3 * P) {
                     out.add(obj::TrigMove, px, laneY + 600).kv(key::TargetGroup, gGlow).kv(key::MoveY, 6).kv(key::Duration, 0.05);
                     out.add(obj::TrigMove, px + v * 0.06, laneY + 600).kv(key::TargetGroup, gGlow).kv(key::MoveY, -6)
                         .kv(key::Duration, P * 0.6).kv(key::Easing, ease::BounceOut);

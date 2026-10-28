@@ -108,6 +108,30 @@ void Gen::planSegments() {
         prev = s.mode;
         modeCount[int(s.mode)]++;
     }
+    // same gamemode, faster second half: a speed-up in the middle of an intense part
+    if (diff() >= 2) {
+        for (size_t i = 1; i < segs.size(); i++) {
+            auto& s = segs[i];
+            if (s.level < 2 || s.t1 - s.t0 < 15 * P || rnd() > 0.4) continue;
+            int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
+            if (s.speedRank >= cap) continue;
+            double mid = (s.t0 + s.t1) / 2, split = -1;
+            for (size_t k = 0; k < beats.size(); k++) {
+                if (down[k] && (split < 0 || std::abs(beats[k] - mid) < std::abs(split - mid))) split = beats[k];
+            }
+            if (split < s.t0 + 6 * P || split > s.t1 - 6 * P) continue;
+            Seg second = s;
+            second.t0 = split;
+            second.speedRank = s.speedRank + 1;
+            second.drop = false;
+            second.mirror = false;
+            s.t1 = split;
+            segs.insert(segs.begin() + long(i) + 1, second);
+            modeCount[int(second.mode)]++;
+            used("speed-up inside a part");
+            i++;
+        }
+    }
     for (size_t i = 0; i + 1 < segs.size(); i++) {
         segs[i].build = segs[i + 1].drop && segs[i + 1].level > segs[i].level;
     }
