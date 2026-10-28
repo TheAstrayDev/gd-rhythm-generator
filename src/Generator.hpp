@@ -31,6 +31,7 @@ struct GenResult {
     int objectCount = 0;
     int startSpeed = 0;     // GD Speed enum value: 0 = 1x, 1 = 0.5x, 2 = 2x, 3 = 3x, 4 = 4x
     std::string summary;
+    std::string features;   // which gameplay / effect techniques were used, with counts
 };
 
 GenResult generate(Analysis const& a, GenOptions const& opt);

@@ -81,6 +81,16 @@ int Analysis::nearestBeat(double t) const {
     return i;
 }
 
+Onset const* Analysis::onsetNear(double t, double window) const {
+    auto it = std::lower_bound(onsets.begin(), onsets.end(), t - window,
+                               [](Onset const& o, double v) { return o.time < v; });
+    Onset const* best = nullptr;
+    for (; it != onsets.end() && it->time <= t + window; ++it) {
+        if (!best || it->strength > best->strength) best = &*it;
+    }
+    return best;
+}
+
 std::string Analysis::summary() const {
     int counts[4] = {0, 0, 0, 0};
     for (auto& s : sections) counts[std::clamp(s.level, 0, 3)]++;
@@ -123,7 +133,7 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
     int lowEnd = std::max(2, int(200.0 / binHz));
     int midEnd = int(2500.0 / binHz);
 
-    std::vector<float> flux(frames, 0), fluxLow(frames, 0), fluxHigh(frames, 0), rms(frames, 0);
+    std::vector<float> flux(frames, 0), fluxLow(frames, 0), fluxMid(frames, 0), fluxHigh(frames, 0), rms(frames, 0);
     std::vector<float> prev(size_t(bins), 0), cur(size_t(bins), 0);
     std::vector<std::complex<float>> buf(FRAME);
 
@@ -137,7 +147,7 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
         }
         rms[f] = float(std::sqrt(e / FRAME));
         fft(buf);
-        float fl = 0, fLow = 0, fHigh = 0;
+        float fl = 0, fLow = 0, fMid = 0, fHigh = 0;
         for (int k = 1; k < bins; k++) {
             float mag = std::abs(buf[size_t(k)]) * (2.f / FRAME);
             cur[size_t(k)] = std::log1p(1000.f * mag);
@@ -146,11 +156,13 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
                 fl += d;
                 if (k < lowEnd) fLow += d;
                 else if (k >= midEnd) fHigh += d;
+                else fMid += d;
             }
         }
         flux[f] = fl;
         fluxLow[f] = fLow;
         fluxHigh[f] = fHigh;
+        fluxMid[f] = fMid;
         std::swap(prev, cur);
     }
 
@@ -334,14 +346,18 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
     auto frameOf = [&](double t) { return std::clamp(long(std::lround((t - frameOffset) * fps)), 0L, long(frames) - 1); };
 
     // ---- 7. per-beat features + downbeat phase --------------------------------------
-    std::vector<float> lowN = fluxLow, highN = fluxHigh, rmsN = rms;
+    std::vector<float> lowN = fluxLow, midN = fluxMid, highN = fluxHigh, rmsN = rms;
     normalizeRange(lowN, 0.1, 0.98);
+    normalizeRange(midN, 0.1, 0.98);
     normalizeRange(highN, 0.1, 0.98);
     normalizeRange(rmsN, 0.05, 0.97);
 
     size_t nb = beats.size();
     res.beatStrength.resize(nb);
     res.beatEnergy.resize(nb);
+    res.beatKick.resize(nb);
+    res.beatSnare.resize(nb);
+    res.beatHat.resize(nb);
     std::vector<float> beatLow(nb), beatHigh(nb);
     for (size_t i = 0; i < nb; i++) {
         res.beatStrength[i] = res.onsetAt(beats[i], 0.035);
@@ -352,6 +368,11 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
         float hi = 0;
         for (long k = std::max(0L, f - 2); k <= std::min(long(frames) - 1, f + 2); k++) hi = std::max(hi, highN[size_t(k)]);
         beatHigh[i] = hi;
+        float mi = 0;
+        for (long k = std::max(0L, f - 2); k <= std::min(long(frames) - 1, f + 2); k++) mi = std::max(mi, midN[size_t(k)]);
+        res.beatKick[i] = lo;
+        res.beatSnare[i] = mi;
+        res.beatHat[i] = hi;
         long f2 = frameOf(beats[i] + beatPeriodSec);
         double e = 0;
         long cnt = 0;
@@ -404,7 +425,13 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
             if (any && i - last < minGap) continue;
             float lo = lowN[i], hi = highN[i];
             float tot = std::max(1e-3f, lo + hi);
-            res.onsets.push_back({double(i) / fps + frameOffset, v, lo / tot, hi / tot});
+            // how long the note rings: loudness stays above half of its peak
+            float loud = 0;
+            for (size_t k = i; k < std::min(frames, i + 4); k++) loud = std::max(loud, rms[k]);
+            size_t e = i;
+            while (e + 1 < frames && e - i < size_t(2.0 * fps) && rms[e + 1] > 0.5f * loud) e++;
+            res.onsets.push_back({double(i) / fps + frameOffset, v, lo / tot, hi / tot,
+                                  midN[i], float(double(e - i) / fps)});
             last = i, any = true;
         }
     }

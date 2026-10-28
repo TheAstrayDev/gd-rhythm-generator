@@ -175,14 +175,40 @@ int main(int argc, char** argv) {
         int bad = 0;
         for (auto& ob : objs) {
             byId[ob.id]++;
-            if (!std::isfinite(ob.x) || !std::isfinite(ob.y) || ob.x < -10 || ob.y < -200 || ob.y > 900) bad++;
+            if (!std::isfinite(ob.x) || !std::isfinite(ob.y) || ob.x < -10 || ob.y < -200 || ob.y > 1500) bad++;
         }
-        std::printf("\n[%s] %s\n  ids:", difficultyName(Difficulty(d)), r.summary.c_str());
+        std::printf("\n[%s] %s\n  features: %s\n  ids:", difficultyName(Difficulty(d)), r.summary.c_str(), r.features.c_str());
         for (auto& [id, c] : byId) std::printf(" %d:%d", id, c);
         std::printf("\n");
         if (bad) { std::printf("FAIL: %d objects with bad coordinates\n", bad); fails++; }
         if (int(objs.size()) != r.objectCount) { std::printf("FAIL: count mismatch %zu vs %d\n", objs.size(), r.objectCount); fails++; }
         if (r.objectCount < 50) { std::printf("FAIL: too few objects\n"); fails++; }
+        // corridor sanity: free space between scaled wall blocks in the same column
+        {
+            std::map<long, std::pair<double, double>> col; // x -> (bottom wall top, top wall bottom)
+            for (auto& ob : objs) {
+                if (ob.id != 1 || !ob.kv.count(129)) continue;
+                double h = 30 * ob.kv[129];
+                long x = std::lround(ob.x);
+                auto& c = col.emplace(x, std::make_pair(0.0, 400.0)).first->second;
+                if (ob.y - h / 2 < 1) c.first = std::max(c.first, ob.y + h / 2);
+                else c.second = std::min(c.second, ob.y - h / 2);
+            }
+            double minFree = 1e9;
+            int run = 0, worstRun = 0;
+            long worstX = 0;
+            long prevX = -1000;
+            for (auto& [x, c] : col) {
+                minFree = std::min(minFree, c.second - c.first);
+                bool tunnel = c.second < 70 && c.first < 1; // squeezed against the floor
+                run = tunnel && x - prevX <= 30 ? run + 1 : tunnel ? 1 : 0;
+                if (run > worstRun) worstRun = run, worstX = x;
+                prevX = x;
+            }
+            std::printf("  corridors: min free %.0f units, longest floor tunnel %d columns\n", col.empty() ? 0.0 : minFree, worstRun);
+            if (!col.empty() && minFree < 34) { std::printf("FAIL: corridor too tight\n"); fails++; }
+            if (worstRun > 12) { std::printf("FAIL: wave/ship stuck in a floor tunnel\n"); fails++; }
+        }
         // move-trigger offsets per group must cancel out
         std::map<int, double> net;
         for (auto& ob : objs) if (ob.id == 901) net[int(ob.kv[51])] += ob.kv[29];

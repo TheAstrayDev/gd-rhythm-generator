@@ -13,6 +13,8 @@ struct Onset {
     float strength;  // 0..1 (normalized onset envelope peak)
     float low;       // 0..1 share of low-band (kick) flux
     float high;      // 0..1 share of high-band (hats/snare) flux
+    float mid;       // 0..1 mid-band (snare / vocals / leads) strength
+    float sustain;   // seconds the note keeps ringing (long notes -> hold mechanics)
 };
 
 struct Section {
@@ -34,6 +36,9 @@ struct Analysis {
     std::vector<float> beatStrength;  // 0..1 onset strength on each beat
     std::vector<float> beatEnergy;    // 0..1 loudness during each beat
     std::vector<bool> downbeat;       // true on the first beat of a bar (4/4)
+    std::vector<float> beatKick;      // 0..1 low-band hit on each beat
+    std::vector<float> beatSnare;     // 0..1 mid-band hit on each beat
+    std::vector<float> beatHat;       // 0..1 high-band hit on each beat
 
     std::vector<Onset> onsets;
     std::vector<Section> sections;
@@ -43,6 +48,9 @@ struct Analysis {
 
     // Index of the beat closest to t (or -1 if none).
     int nearestBeat(double t) const;
+
+    // Strongest onset within +-window of t (nullptr if none).
+    Onset const* onsetNear(double t, double window = 0.05) const;
 
     std::string summary() const;
 
