@@ -95,7 +95,7 @@ void Gen::genCube(size_t si) {
     int lv = std::clamp(s.level, 0, 3);
     double minGap = std::max(D.minGap, 0.12);
     int maxH = dif == 0 ? 1 : dif == 1 ? 2 : 4;
-    bool allowFlip = dif >= 2 && lv >= 1;
+    bool allowFlip = dif >= 3 && lv >= 2; // plane switches: Harder+, intense parts only
     bool allowDash = D.orbs && dif >= 1;
 
     // ---- rhythm: phrases of 4 bars with repeating motifs ----------------------------
@@ -245,13 +245,17 @@ void Gen::genCube(size_t si) {
             double x = tl.x(c.t);
             double nextT = ci + 1 < cl.size() ? cl[ci + 1].t : c.t + P;
             Intent it = pl.in[ci];
+            // upside down the player only gets plain jumps (or the way back): readable & fair
+            if (S.plane == Ceil && !S.flying && it != IFlip) it = IJump;
+            if (S.plane == Ceil && S.flying && it != IFlip) it = IJump;
             int var = pl.var[ci];
-            double maxLocal = S.plane == Ceil ? 30 : maxH * 30.0; // keep space between planes
+            double maxLocal = S.plane == Ceil ? 0 : maxH * 30.0; // flat while upside down
             double base = pl.ct == CWalk ? std::clamp(S.surf + (var % 3 - 1) * 30.0, 0.0, maxH * 30.0)
                                          : targetOf(pl.ct, int(ci), int(cl.size()), S.surf);
             double target = std::min(maxLocal, base + pl.hv[ci] * 30.0);
             if (!S.flying) {
-                if (c.t < S.lastLand + 0.06) { S.skipped++; continue; }
+                double rest = S.plane == Ceil ? 0.3 : 0.06; // time to read the flipped view
+                if (c.t < S.lastLand + rest) { S.skipped++; continue; }
                 if (it == IFlip && allowFlip && flipAt(S, c.t, true)) {
                     kindMask |= 1 << 4;
                     S.sig += 'F';
@@ -399,7 +403,8 @@ void Gen::genCube(size_t si) {
         if (cl.empty()) continue;
         bool lastBars = bi + 2 >= barClicks.size();
         auto evaluate = [&](BarPlan pl, Sim& T) {
-            if (lastBars && S.plane == Ceil) pl.in[0] = IFlip; // come back down in time
+            // come back down in time: at the end of the part, or after two bars upside down
+            if (S.plane == Ceil && (lastBars || cl.front().t - S.lastFlip > 8 * P)) pl.in[0] = IFlip;
             T = S;
             runBar(T, cl, pl);
             double score = 0;
@@ -574,7 +579,7 @@ void Gen::genCube(size_t si) {
                 used(pl == Ceil ? "hanging spike pit" : "spike pit");
                 continue;
             }
-            int n = std::min(fit, 1 + rndInt(D.maxSpikes));
+            int n = std::min(fit, 1 + rndInt(pl == Ceil ? std::min(2, D.maxSpikes) : D.maxSpikes));
             Obst ob = fl.obstacle;
             if (ob == ObMixed) ob = rnd() < 0.5 ? ObSpikes : ObBlocks;
             if (ob == ObSpikeBlock && safe(c, 30 + SPIKE_TOP, 15)) {
