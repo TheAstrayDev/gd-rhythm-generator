@@ -5,22 +5,55 @@ on:
   push:
     branches: ["**"]
 
+# The game is GD 2.2091. Released Geode SDK tags (5.11.2) still target 2.2081, while the
+# SDK's `v6` branch (also versioned 5.11.2) targets 2.2091, so we build from that branch
+# and link against the 5.11.2 loader binaries that are installed in the game.
+env:
+  GEODE_SDK_BRANCH: v6
+  GEODE_BINARIES_VERSION: 5.11.2
+
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build the mod
-        id: build
-        uses: geode-sdk/build-geode-mod@main
         with:
-          # the v6 branch of the SDK (still versioned 5.11.2) targets GD 2.2091
-          sdk: v6
-          target: Win64
+          path: mod
+
+      - name: Setup Geode CLI
+        uses: geode-sdk/cli/.github/actions/setup@main
+
+      - name: Setup Geode SDK (branch)
+        shell: bash
+        run: |
+          export CLI_PROFILE="$GITHUB_WORKSPACE/cli-profile"
+          mkdir -p "$CLI_PROFILE/geode/mods"
+          geode profile add --name GithubActions "$CLI_PROFILE/GeometryDash.exe" win
+          geode sdk install "$GITHUB_WORKSPACE/geode-sdk-clone"
+          export GEODE_SDK="$GITHUB_WORKSPACE/geode-sdk-clone"
+          echo "GEODE_SDK=$GEODE_SDK" >> $GITHUB_ENV
+          cd "$GEODE_SDK"
+          git fetch origin "$GEODE_SDK_BRANCH"
+          git checkout -B "$GEODE_SDK_BRANCH" "origin/$GEODE_SDK_BRANCH"
+          git log -1 --oneline
+          grep -A2 "begin GEODE_GD_VERSION" CMakeLists.txt
+          geode sdk install-binaries --platform win --version "$GEODE_BINARIES_VERSION"
+
+      - name: Build
+        shell: bash
+        working-directory: mod
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DGEODE_CODEGEN_CMAKE_ARGS="-DCMAKE_C_COMPILER=clang;-DCMAKE_CXX_COMPILER=clang++;-G Ninja" \
+            -G Ninja -DGEODE_DONT_INSTALL_MODS=ON -DGEODE_TARGET_PLATFORM=Win64
+          cmake --build build --config Release --parallel
+          mkdir -p ../output
+          find ./build -name "*.geode" -exec cp {} ../output \;
+          ls -la ../output
 
       - name: Upload .geode
         uses: actions/upload-artifact@v4
         with:
           name: rhythm-generator
-          path: ${{ steps.build.outputs.build-output }}/*.geode
+          path: output/*.geode
