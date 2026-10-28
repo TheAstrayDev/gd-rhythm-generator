@@ -17,6 +17,8 @@ jobs:
         with:
           sdk: v5.11.2
           target: Win64
+          # Geode 5.11.2 defaults to GD 2.2081; the game here is 2.2091
+          configure-args: -DGEODE_GD_VERSION=2.2091 -DGEODE_COMP_GD_VERSION=22091
 
       - name: Upload .geode
         uses: actions/upload-artifact@v4
