@@ -350,7 +350,7 @@ void GeneratorPopup::startDecode(float) {
         return;
     }
     rgTrace(fmt::format("generate: decoded {} samples at {} Hz", samples.size(), rate));
-    setStatus("Analyzing rhythm and building the level...", {255, 220, 120});
+    setStatus("Analyzing rhythm and planning the speeds...", {255, 220, 120});
 
     rg::GenOptions opt;
     opt.difficulty = rg::Difficulty(s_last.difficulty);
@@ -358,12 +358,14 @@ void GeneratorPopup::startDecode(float) {
     opt.seed = s_last.seed;
     opt.syncOffset = s_last.offsetMs / 1000.0;
     opt.songOffset = m_editor->m_levelSettings ? m_editor->m_levelSettings->m_songOffset : 0.0;
+    opt.speedPortalsOnly = true;
 
-    // worker thread only touches plain C++ data; the main thread polls for the result
+    // pass 1 on a worker: analysis + the speed plan (only speed portals)
     m_job = std::make_shared<Job>();
-    std::thread([job = m_job, samples = std::move(samples), rate, opt]() mutable {
-        auto analysis = rg::analyze(samples, rate);
-        job->result = rg::generate(analysis, opt);
+    m_job->opt = opt;
+    std::thread([job = m_job, samples = std::move(samples), rate]() mutable {
+        job->analysis = rg::analyze(samples, rate);
+        job->result = rg::generate(job->analysis, job->opt);
         job->done = true;
     }).detach();
     this->schedule(schedule_selector(GeneratorPopup::checkWorker), 0.1f);
@@ -371,9 +373,68 @@ void GeneratorPopup::startDecode(float) {
 
 void GeneratorPopup::checkWorker(float) {
     if (!m_job || !m_job->done) return;
+    if (m_job->stage == 1) {
+        // ---- pass 1 finished: place the speed portals, then ask GD where the player is
+        rgTrace("generate: pass 1 finished");
+        auto& p1 = m_job->result;
+        if (p1.objects.empty()) {
+            this->unschedule(schedule_selector(GeneratorPopup::checkWorker));
+            auto job = std::move(m_job);
+            applyResult(job->result);
+            return;
+        }
+        if (s_last.clear) {
+            // Let GD walk its own object list: reading m_objects through the fresh 2.2091
+            // bindings returned garbage pointers and crashed in removeObject.
+            for (int id : rg::generatedObjectIds()) m_editor->removeAllObjectsOfType(id);
+        }
+        rgTrace(fmt::format("generate: place {} speed portals", p1.objectCount));
+        m_editor->createObjectsFromString(p1.objects, true, true);
+        if (auto settings = m_editor->m_levelSettings) {
+            settings->m_startSpeed = Speed(p1.startSpeed);
+            settings->m_startMode = 0;
+        }
+        // GD's own time -> position conversion, with the portals that are now in the level
+        rgTrace("generate: sample posForTime");
+        double step = m_job->opt.timelineStep;
+        std::vector<double> table;
+        size_t n = p1.modelX.size();
+        table.reserve(n);
+        for (size_t i = 0; i < n; i++) table.push_back(m_editor->posForTime(float(i * step)).x);
+        // sanity: increasing and close to the generator's own model (portal timing differs by
+        // at most a few dozen units; anything else means the table can't be trusted)
+        bool ok = n > 10;
+        double maxDiff = 0;
+        for (size_t i = 1; ok && i < n; i++) {
+            if (!(table[i] >= table[i - 1]) || !std::isfinite(table[i])) ok = false;
+            maxDiff = std::max(maxDiff, std::abs(table[i] - p1.modelX[i]));
+        }
+        if (ok && maxDiff > 150) ok = false;
+        rgTrace(fmt::format("generate: GD timeline {} (max diff to model {:.1f} units)", ok ? "used" : "rejected", maxDiff));
+        auto opt2 = m_job->opt;
+        opt2.speedPortalsOnly = false;
+        if (ok) opt2.timelineX = std::move(table);
+        else {
+            // fall back to the model; pass 2 then places the speed portals itself
+            for (int id : {200, 201, 202, 203, 1334}) m_editor->removeAllObjectsOfType(id);
+        }
+        m_syncNote = ok ? fmt::format("synced to GD timeline (portal offset {:.0f} units)", maxDiff)
+                        : std::string("GD timeline unavailable, model timing");
+        // ---- pass 2 on a worker: everything else on that timeline
+        setStatus("Building the level on GD's timeline...", {255, 220, 120});
+        auto job = m_job;
+        job->done = false;
+        job->stage = 2;
+        job->opt = std::move(opt2);
+        std::thread([job]() {
+            job->result = rg::generate(job->analysis, job->opt);
+            job->done = true;
+        }).detach();
+        return;
+    }
     this->unschedule(schedule_selector(GeneratorPopup::checkWorker));
     auto job = std::move(m_job);
-    rgTrace("generate: worker finished");
+    rgTrace("generate: pass 2 finished");
     applyResult(job->result);
 }
 
@@ -383,21 +444,8 @@ void GeneratorPopup::applyResult(rg::GenResult const& res) {
         setStatus(res.summary.empty() ? "Generation failed" : res.summary, {255, 100, 100});
         return;
     }
-    if (s_last.clear) {
-        // Let GD walk its own object list: reading m_objects through the fresh 2.2091
-        // bindings returned garbage pointers and crashed in removeObject.
-        for (int id : rg::generatedObjectIds()) {
-            rgTrace(fmt::format("apply: clear type {}", id));
-            m_editor->removeAllObjectsOfType(id);
-        }
-    }
     rgTrace(fmt::format("apply: createObjectsFromString ({} objects)", res.objectCount));
     m_editor->createObjectsFromString(res.objects, true, true);
-    rgTrace("apply: level settings");
-    if (auto settings = m_editor->m_levelSettings) {
-        settings->m_startSpeed = Speed(res.startSpeed);
-        settings->m_startMode = 0;
-    }
     rgTrace("apply: done");
-    setStatus(fmt::format("Done! {}", res.summary), {120, 255, 120});
+    setStatus(fmt::format("Done! {} | {}", m_syncNote, res.summary), {120, 255, 120});
 }

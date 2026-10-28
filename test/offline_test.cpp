@@ -255,6 +255,31 @@ int main(int argc, char** argv) {
         }
         if (nz) { std::printf("FAIL: %d groups with non-zero net move\n", nz); fails++; }
     }
+    // two-pass generation: pass 1 speed plan, a fake "GD" table whose speed changes happen
+    // 16 units later than the model, pass 2 on that table
+    {
+        GenOptions o;
+        o.difficulty = Difficulty::Insane;
+        o.seed = 4242;
+        o.speedPortalsOnly = true;
+        auto p1 = generate(a, o);
+        std::vector<double> gd = p1.modelX;
+        // shift: x_gd(t) = x_model(t - 16 / v(t)) approximated by delaying every slope change
+        for (size_t i = gd.size() - 1; i > 0; i--) {
+            double v = (p1.modelX[i] - p1.modelX[i - 1]) / o.timelineStep;
+            size_t back = size_t(std::lround(16.0 / std::max(1.0, v) / o.timelineStep));
+            if (i > back) gd[i] = p1.modelX[i - back] + 16.0 * 0; // same curve, delayed
+        }
+        o.speedPortalsOnly = false;
+        o.timelineX = gd;
+        auto p2 = generate(a, o);
+        auto objs2 = parse(p2.objects);
+        int speedPortals = 0;
+        for (auto& ob : objs2) if (ob.id == 200 || ob.id == 201 || ob.id == 202 || ob.id == 203 || ob.id == 1334) speedPortals++;
+        std::printf("\n[two-pass] pass1 %d objects (speed portals), pass2 %d objects, speed portals in pass2: %d\n",
+                    p1.objectCount, p2.objectCount, speedPortals);
+        if (p2.objectCount < 500 || speedPortals != 0) { std::printf("FAIL: two-pass generation\n"); fails++; }
+    }
     if (argc > 2) {
         GenOptions o;
         o.difficulty = Difficulty(argc > 3 ? std::atoi(argv[3]) : 2);

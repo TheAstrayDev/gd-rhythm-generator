@@ -52,6 +52,9 @@ protected:
 
     struct Job {
         std::atomic<bool> done{false};
+        int stage = 1;          // 1: speed plan, 2: the level
+        rg::GenOptions opt;
+        rg::Analysis analysis;
         rg::GenResult result;
     };
 
@@ -68,4 +71,5 @@ protected:
     geode::Ref<cocos2d::CCNode> m_songLayer = nullptr;
     bool m_busy = false;
     float m_downloadWait = 0;
+    std::string m_syncNote;
 };

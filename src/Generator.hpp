@@ -24,6 +24,14 @@ struct GenOptions {
     bool effects = true;       // color / pulse / move / alpha / shake / camera triggers
     double syncOffset = 0;     // seconds, added to every musical time (user calibration)
     double songOffset = 0;     // level's song start offset (seconds)
+
+    // Two-pass generation for exact sync with speed changes:
+    //  pass 1 (speedPortalsOnly): only the planned speed portals are produced; the mod places
+    //          them and asks GD itself where the player is at every moment (posForTime)
+    //  pass 2 (timeline set): everything else is built on GD's own time -> x table
+    bool speedPortalsOnly = false;
+    std::vector<double> timelineX; // x at t = i * timelineStep (from GD), empty = use the model
+    double timelineStep = 0.01;
 };
 
 struct GenResult {
@@ -32,6 +40,8 @@ struct GenResult {
     int startSpeed = 0;     // GD Speed enum value: 0 = 1x, 1 = 0.5x, 2 = 2x, 3 = 3x, 4 = 4x
     std::string summary;
     std::string features;   // which gameplay / effect techniques were used, with counts
+    std::vector<double> modelX; // pass 1: the generator's own x at t = i * timelineStep
+    double duration = 0;        // level time covered (seconds)
 };
 
 GenResult generate(Analysis const& a, GenOptions const& opt);

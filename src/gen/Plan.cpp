@@ -79,10 +79,17 @@ void Gen::planSegments() {
                 if ((r -= o.second) <= 0) { s.mode = o.first; break; }
             }
         }
-        // One speed for the whole level. Every speed portal is a point where the game and the
-        // music can drift apart (by how many units early a portal fires); a single speed set
-        // at the spawn point keeps the sync exact.
-        int rank = D.speedRank;
+        // Speed plan, decided from the song structure: drops and peaks one step faster, a calm
+        // breakdown right after an intense part one step slower, everything else back at the
+        // base speed. (Exact sync comes from GD's own time table, see run().)
+        int base = D.speedRank;
+        int rank = base;
+        if (diff() >= 1 && i > 0) {
+            if (s.level >= 3) rank = base + 1;
+            else if (s.level == 0 && segs[i - 1].level >= 2 && diff() >= 2) rank = base - 1;
+        }
+        bool flyingMode = s.mode == Mode::Ship || s.mode == Mode::Wave;
+        rank = std::clamp(rank, 0, flyingMode ? 3 : 4);
         s.speedRank = rank;
 
         // modifiers
@@ -103,10 +110,10 @@ void Gen::planSegments() {
         modeCount[int(s.mode)]++;
     }
     // same gamemode, faster second half: a speed-up in the middle of an intense part
-    if (false) { // speed changes inside the level are disabled for exact sync
+    if (diff() >= 2) {
         for (size_t i = 1; i < segs.size(); i++) {
             auto& s = segs[i];
-            if (s.level < 2 || s.t1 - s.t0 < 15 * P || rnd() > 0.25) continue;
+            if (s.level < 3 || s.t1 - s.t0 < 15 * P || rnd() > 0.3) continue;
             int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
             if (s.speedRank >= cap) continue;
             double mid = (s.t0 + s.t1) / 2, split = -1;
@@ -124,6 +131,15 @@ void Gen::planSegments() {
             modeCount[int(second.mode)]++;
             used("speed-up inside a part");
             i++;
+        }
+    }
+    // no speed "blips": a short part whose speed differs from both neighbours, which agree,
+    // keeps the neighbours' speed
+    for (size_t i = 1; i + 1 < segs.size(); i++) {
+        auto& s = segs[i];
+        if (s.t1 - s.t0 < 16 * P && segs[i - 1].speedRank == segs[i + 1].speedRank && s.speedRank != segs[i - 1].speedRank) {
+            int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
+            s.speedRank = std::min(segs[i - 1].speedRank, cap);
         }
     }
     for (size_t i = 0; i + 1 < segs.size(); i++) {
@@ -236,25 +252,6 @@ void Gen::spike(double x, double y, bool pointDown, int group) {
 void Gen::portal(size_t i) {
     auto& s = segs[i];
     double x = tl.x(s.t0) + 30;
-    // The timeline switches speed exactly at x(t0), the same way GD 2.2 converts music time
-    // to position (the change happens at the portal's x). The portal sits exactly there; a
-    // column of them so the player meets one at any height.
-    if (i > 0 && s.speedRank != segs[i - 1].speedRank) {
-        for (double y : {15.0, 75.0, 135.0, 195.0}) out.add(SPEED_PORTAL[s.speedRank], tl.x(s.t0), y);
-    }
-    // the level speed, set right where the player spawns (overlapping on the first frame),
-    // whatever start speed the level had saved before
-    if (i == 0) for (double y : {15.0, 75.0, 135.0}) out.add(SPEED_PORTAL[s.speedRank], 0, y);
-    // Safety net: the same speed again every 4 bars. A portal of the current speed does
-    // nothing, but if the spawn portal / start speed were not applied, the first of these
-    // fixes the speed early, leaving a small constant offset instead of a growing drift.
-    if (i == 0) {
-        double P = beatLen();
-        for (double t = 0.15; t < segs.back().t1; t += t < 1 ? 16 * P - 0.15 : 16 * P) {
-            for (double y : {15.0, 75.0, 135.0, 195.0}) out.add(SPEED_PORTAL[s.speedRank], tl.x(t), y);
-        }
-        used("speed safety portals");
-    }
     if (s.mirror) { out.add(obj::PortalMirrorOn, x - 30, 45); used("mirror portal"); }
     if (s.mini) { out.add(obj::PortalSizeMini, x + 45, 45); used("mini portal"); }
     if (i == 0) return;
@@ -267,6 +264,32 @@ void Gen::portal(size_t i) {
         case Mode::Spider: id = obj::PortalSpider; break;
     }
     out.add(id, x + 15, 45);
+}
+
+// All speed portals of the plan, as columns so the player meets one at any height:
+// the start speed on the spawn point, every planned change at the part boundary, and the
+// current speed again every 4 bars as a safety net (a portal of the current speed does
+// nothing, but if one was missed the next one corrects it).
+void Gen::speedPortals() {
+    double P = beatLen();
+    auto column = [&](int rank, double x) {
+        for (double y : {15.0, 75.0, 135.0, 195.0}) out.add(SPEED_PORTAL[rank], x, y);
+    };
+    column(segs[0].speedRank, 0);
+    std::vector<double> changes;
+    for (size_t i = 1; i < segs.size(); i++) {
+        if (segs[i].speedRank == segs[i - 1].speedRank) continue;
+        column(segs[i].speedRank, tl.x(segs[i].t0));
+        changes.push_back(segs[i].t0);
+        used(segs[i].speedRank > segs[i - 1].speedRank ? "speed up" : "speed down");
+    }
+    for (size_t i = 0; i < segs.size(); i++) {
+        for (double t = segs[i].t0 + 8 * P; t < segs[i].t1 - 2 * P; t += 16 * P) {
+            bool nearChange = false;
+            for (double c : changes) if (std::abs(c - t) < 2 * P) nearChange = true;
+            if (!nearChange) column(segs[i].speedRank, tl.x(t));
+        }
+    }
 }
 
 void Gen::portalEnd(size_t i) {
@@ -294,6 +317,25 @@ GenResult Gen::run() {
 
     planSegments();
     buildTimeline();
+    res.duration = segs.back().t1;
+
+    if (O.speedPortalsOnly) {
+        // pass 1: only the speed plan, plus the model's time -> x table for validation
+        speedPortals();
+        res.objects = out.finish();
+        res.objectCount = out.count;
+        res.startSpeed = SPEED_ENUM[segs.front().speedRank];
+        for (double t = 0; t <= res.duration + 1; t += O.timelineStep) res.modelX.push_back(tl.x(t));
+        return res;
+    }
+    if (O.timelineX.size() > 1) {
+        // pass 2: the speed portals are already in the level; build on GD's own timeline
+        tl.table = O.timelineX;
+        tl.step = O.timelineStep;
+        used("GD timeline sync");
+    } else {
+        speedPortals();
+    }
 
     for (size_t i = 0; i < segs.size(); i++) {
         portal(i);

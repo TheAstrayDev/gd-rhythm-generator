@@ -166,15 +166,30 @@ private:
 struct Timeline {
     struct K { double t, x, v; };
     std::vector<K> ks;
+    // optional table measured from GD (x at t = i * step); used instead of the model
+    std::vector<double> table;
+    double step = 0.01;
 
     K const& at(double t) const {
         size_t i = 0;
         while (i + 1 < ks.size() && ks[i + 1].t <= t) i++;
         return ks[i];
     }
-    double x(double t) const {
+    double model(double t) const {
         auto& k = at(t);
         return k.x + (t - k.t) * k.v;
+    }
+    double x(double t) const {
+        if (table.size() < 2) return model(t);
+        double f = t / step;
+        if (f <= 0) return table.front() + t * (table[1] - table[0]) / step;
+        size_t i = size_t(f);
+        if (i + 1 >= table.size()) {
+            size_t n = table.size();
+            return table[n - 1] + (t - (n - 1) * step) * (table[n - 1] - table[n - 2]) / step;
+        }
+        double u = f - double(i);
+        return table[i] * (1 - u) + table[i + 1] * u;
     }
 };
 
@@ -251,6 +266,7 @@ public:
     int chunkGroup(size_t segIdx, double t, double x, bool upper);
     void spike(double x, double y, bool down, int group);
     void portal(size_t i);
+    void speedPortals();
     void portalEnd(size_t i);
     // music helpers
     float kickAt(double levelT) const;
