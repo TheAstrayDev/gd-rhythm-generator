@@ -5,9 +5,9 @@
 	},
 	"id": "astray.rhythm-generator",
 	"name": "Rhythm Level Generator",
-	"version": "v1.0.0",
+	"version": "v1.0.0-beta.1",
 	"developer": "Astray",
-	"description": "Generates a beat-synced, playable layout with triggers from any song in the editor.",
+	"description": "Beta: generates a beat-synced, playable layout with triggers from any song, right in the editor.",
 	"tags": [
 		"editor",
 		"music",

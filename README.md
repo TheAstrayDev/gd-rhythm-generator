@@ -1,4 +1,23 @@
-# Rhythm Level Generator (Geode, GD 2.2091)
+# Rhythm Level Generator (Geode, GD 2.2091) — beta
+
+**Turn any song into a beat-synced Geometry Dash level in one click, right in the editor.**
+No AI, no templates to fill in: the mod analyses the music (tempo, beats, downbeats, drops,
+long notes) and builds a playable layout with cube, ship, wave, ball and spider parts, speed
+changes on the drops and a full trigger / shader show that stays out of the way when the
+gameplay gets hard.
+
+## Download (beta)
+1. Grab `astray.rhythm-generator.geode` from the
+   [latest release](https://github.com/TheAstrayDev/gd-rhythm-generator/releases).
+2. Put it into `Geometry Dash/geode/mods` (Geode 5.11.2, GD 2.2091) and restart the game.
+3. Open any level in the editor and press **AutoGen** at the top.
+
+It's a beta: physics constants for some orbs / pads are approximations, so play the result
+before you upload it. Bug reports are welcome in the issues.
+
+---
+
+## По-русски
 
 Мод генерирует в редакторе играбельный layout-уровень под любую песню. Биты, сильные доли,
 дропы, брейки и длинные ноты определяются анализом аудио (без ИИ), геймплей строится в такт.
