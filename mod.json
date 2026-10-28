@@ -8,21 +8,9 @@
 	"version": "v1.0.0",
 	"developer": "Astray",
 	"description": "Generates a beat-synced, playable layout with triggers from any song in the editor.",
-	"tags": ["editor", "music", "utility"],
-	"settings": {
-		"offset-ms": {
-			"type": "int",
-			"name": "Sync offset (ms)",
-			"description": "Shifts all generated objects in time. Positive = later. Use it if clicks feel early/late on your setup.",
-			"default": 0,
-			"min": -300,
-			"max": 300,
-			"control": {
-				"arrows": true,
-				"arrow-step": 5,
-				"slider": true,
-				"input": true
-			}
-		}
-	}
+	"tags": [
+		"editor",
+		"music",
+		"utility"
+	]
 }
