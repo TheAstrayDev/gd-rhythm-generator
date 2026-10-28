@@ -23,6 +23,9 @@ protected:
     void onToggleClear(cocos2d::CCObject*);
     void onToggleEffects(cocos2d::CCObject*);
     void onGenerate(cocos2d::CCObject*);
+    // Closes without calling Popup::onClose: the SDK branch we build with declares it public while
+    // the installed Geode 5.11.2 exports it as protected, so the base symbol cannot be linked.
+    void onClose(cocos2d::CCObject*) override;
 
     void checkDownload(float);
     void startDecode(float);

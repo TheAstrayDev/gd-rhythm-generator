@@ -193,6 +193,13 @@ void GeneratorPopup::onToggleEffects(CCObject*) {
     s_last.effects = m_effects;
 }
 
+void GeneratorPopup::onClose(CCObject*) {
+    this->unscheduleAllSelectors();
+    this->setKeypadEnabled(false);
+    this->setTouchEnabled(false);
+    this->removeFromParentAndCleanup(true);
+}
+
 void GeneratorPopup::onGenerate(CCObject*) {
     if (m_busy) return;
     auto level = m_editor->m_level;
