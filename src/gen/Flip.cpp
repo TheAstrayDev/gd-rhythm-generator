@@ -47,7 +47,7 @@ void Gen::genFlip(size_t si, bool spider) {
     auto ev = pick(candidates(s, a, b, sub + 1), targetCount(s, a, b, spider ? 0.8 : 0.55), gap);
     if (ev.size() % 2 == 1) ev.pop_back(); // must end on the floor
     double minGapUnits = spider ? 60 : 90;
-    double ballG = 0.6 * CUBE_G;
+    Ballistic ballPh{BALL_GRAV * CUBE_PHYS[s.speedRank].g}; // a click flips with BALL_PUSH towards the new floor
     bool shifting = diff() >= 1;
     bool portalsAllowed = spider ? diff() >= 2 : diff() >= 3;
 
@@ -71,7 +71,7 @@ void Gen::genFlip(size_t si, bool spider) {
         for (size_t k = 0; k < ev.size(); k++) {
             double tk = ev[k].t;
             double tn = k + 1 < ev.size() ? ev[k + 1].t : s.t1 - 0.4;
-            double tr = spider ? 0 : std::sqrt(2 * std::max(0.0, C - F - 30) / ballG);
+            double tr = spider ? 0 : ballPh.fall(std::max(0.0, C - F - 30), -BALL_PUSH, 0);
             double late = spider ? D.spiderLate : std::max(0.19, std::min(D.ballLate, tr + 0.05));
             double early = spider ? 0.05 : 0.0;
             bool isPortal = pl.portal[k] && portalOk[k];

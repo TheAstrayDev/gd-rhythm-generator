@@ -21,18 +21,19 @@ enum Tileset { TsGrid, TsBeveled, TsMech, TsColored, TsOutline, TsBlack, TILESET
 struct Genome {
     // design
     double tiles[TILESET_COUNT] = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
-    double glow = 0.5, chains = 0.3, gears = 0.3, wallDeco = 0.5, blockDesign = 0.8;
+    double glow = 0.5, slopes = 0.6, saws = 0.4, blockDesign = 0.8;
     // effects
     double fx = 0.5, camera = 0.5, flashes = 0.5, screenFlip = 0.2, mirror = 0.3, entrances = 0.6;
     // gameplay
     double switchRate = 0.5, speedVariety = 0.5, orbs = 0.5, pads = 0.5, platforms = 0.5;
     double planeFlips = 0.4, robot = 0.4, waveSpam = 0.4, shipGates = 0.4;
+    double dual = 0.4, flyers = 0.5, teleports = 0.4, slams = 0.4; // dual portals, ufo / swing, teleports, black / spider orbs
 
     template <class F> void each(F&& f) {
         for (double& t : tiles) f(t);
-        for (double* v : {&glow, &chains, &gears, &wallDeco, &blockDesign, &fx, &camera, &flashes, &screenFlip,
-                          &mirror, &entrances, &switchRate, &speedVariety, &orbs, &pads, &platforms, &planeFlips,
-                          &robot, &waveSpam, &shipGates})
+        for (double* v : {&glow, &slopes, &saws, &blockDesign, &fx, &camera, &flashes, &screenFlip, &mirror,
+                          &entrances, &switchRate, &speedVariety, &orbs, &pads, &platforms, &planeFlips, &robot,
+                          &waveSpam, &shipGates, &dual, &flyers, &teleports, &slams})
             f(*v);
     }
 };

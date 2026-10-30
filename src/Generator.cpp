@@ -10,7 +10,7 @@ char const* difficultyName(Difficulty d) {
 }
 
 char const* modeName(Mode m) {
-    static char const* names[] = {"Cube", "Ship", "Ball", "Wave", "Spider", "Robot"};
+    static char const* names[] = {"Cube", "Ship", "Ball", "Wave", "Spider", "Robot", "UFO", "Swing"};
     return names[int(m)];
 }
 
@@ -30,10 +30,21 @@ std::vector<int> generatedObjectIds() {
         obj::ShaderSepia, obj::ShaderInvert, obj::ShaderHue,
     };
     for (int id : SPEED_PORTAL) ids.push_back(id);
-    // design layer: tiles, glow, chains, gears; robot portal; blue pad / orb
-    for (int id : {2, 3, 6, 7, 83, 70, 71, 74, 75, 94, 76, 77, 78, 81, 82, 207, 208, 209, 467, 469, 470, 471, 91,
-                   1011, 503, 1012, 504, 41, 110, 107, 85, 86, 87, 745, 67, 84})
+    // design layer: every tileset's tiles and slopes, the fill, glow (and the chains / gears older
+    // versions placed, so regenerating removes them too)
+    for (auto& t : TILESETS)
+        for (int id : {t.top, t.outer, t.inner, t.pillar, t.cap, t.slope}) ids.push_back(id);
+    for (int id : {FILL_BLOCK, GLOW_LARGE, GLOW_MEDIUM, 1012, 504, 41, 110, 107, 85, 86, 87, 1, 92, 96, 95, 213, 212})
         ids.push_back(id);
+    // newer gameplay objects: robot / ufo / swing / dual portals, teleports, blue / black / spider
+    // orbs and pads, saws and blades
+    for (int id : {obj::PortalRobot, obj::PortalUfo, obj::PortalSwing, obj::PortalDual, obj::PortalDualOff, obj::Teleport,
+                   obj::OrbBlue, obj::PadBlue, obj::OrbBlack, obj::OrbSpider, obj::PadSpider})
+        ids.push_back(id);
+    for (auto& [id, r] : SAWS) ids.push_back(id);
+    for (auto& [id, r] : BLADES) ids.push_back(id);
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     return ids;
 }
 

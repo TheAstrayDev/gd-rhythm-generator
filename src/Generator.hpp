@@ -15,7 +15,8 @@ enum class Difficulty { Easy = 0, Normal, Hard, Harder, Insane, Demon };
 inline constexpr int DIFFICULTY_COUNT = 6;
 char const* difficultyName(Difficulty d);
 
-enum class Mode { Cube, Ship, Ball, Wave, Spider, Robot };
+enum class Mode { Cube, Ship, Ball, Wave, Spider, Robot, Ufo, Swing };
+inline constexpr int MODE_COUNT = 8;
 char const* modeName(Mode m);
 
 struct GenOptions {
@@ -35,6 +36,10 @@ struct GenOptions {
     double timelineStep = 0.01;
 };
 
+// A point of the path the generator intends the player to take (centre, half hitbox size);
+// tests check it against the placed objects.
+struct TracePoint { double x, y, half; };
+
 struct GenResult {
     std::string objects;    // "1,8,2,..;1,1,2,..;" (no level header)
     int objectCount = 0;
@@ -44,6 +49,7 @@ struct GenResult {
     std::vector<double> modelX; // pass 1: the generator's own x at t = i * timelineStep
     double duration = 0;        // level time covered (seconds)
     std::string style;          // the style mix this level was generated with
+    std::vector<TracePoint> trace; // intended player paths (cube, dual cube, every corridor lane)
 };
 
 GenResult generate(Analysis const& a, GenOptions const& opt);

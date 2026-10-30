@@ -3,9 +3,11 @@
 **Turn any song into a beat-synced Geometry Dash level in one click, right in the editor.**
 
 The mod analyses the music (tempo, beats, downbeats, drops, breakdowns, long notes, and the
-vocals as a separate pool) and builds a playable layout from it: cube, ship, wave, ball, spider
-and robot parts, speed changes planned around the song, a design layer learned from RobTop's own
-levels, and a full trigger / shader show that stays out of the way when the gameplay gets hard.
+vocals as a separate pool) and builds a playable layout from it: cube, ship, wave, ball, spider,
+robot, UFO and swing parts, dual portals, teleports, speed changes planned around the song, a
+design layer learned from RobTop's own levels, and a full trigger / shader show that stays out
+of the way when the gameplay gets hard. Every release is checked by a playthrough test: the path
+the generator intends never touches a block, a slope, a spike or a saw.
 Pick the styles you like and every level blends them into a new one.
 The generation itself is pure algorithms, with no AI model inside the mod.
 
@@ -15,7 +17,7 @@ The generation itself is pure algorithms, with no AI model inside the mod.
 2. Put it into `Geometry Dash/geode/mods` (Geode 5.11.2, GD 2.2091) and restart the game.
 3. Open any level in the editor and press **AutoGen** at the top.
 
-It's a beta: physics values for some orbs and pads are approximations, so play the result
+It's a beta: the physics constants are taken from GD's own values, but play the result
 before you upload it. Bug reports are welcome in [Issues](https://github.com/TheAstrayDev/gd-rhythm-generator/issues).
 
 ## How to use
@@ -34,18 +36,19 @@ before you upload it. Bug reports are welcome in [Issues](https://github.com/The
    level got and whether it was synced on GD's own timeline.
 
 ## Styles
-A style is a "genome" of about 25 knobs: tilesets, glow, chains, gears, wall decoration, shader
+A style is a "genome" of 29 knobs: tileset weights, glow, slopes, saws, block design, shader
 amount, camera, flashes, screen flips, mirror, entrances, how often the gamemode switches, speed
-variety, orbs, pads, platforms, plane flips, robot, wave spam, ship gates.
+variety, orbs, pads, platforms, plane flips, robot, wave spam, ship gates, dual portals, UFO /
+swing parts, teleports and slams (black and spider orbs).
 
 | Style | Look and feel |
 |---|---|
-| Classic | RobTop's look: grid and beveled tiles, glow on every edge, chains |
-| Modern | outline blocks, little deco, obstacles flying into place, plane flips |
+| Classic | RobTop's look: grid and beveled tiles, glow on the edges, pads |
+| Modern | outline blocks, sloped corridors, obstacles flying into place, plane flips, teleports |
 | Neon | coloured tiles drowned in glow, lots of flashes |
-| Tech | mechanical tiles, spinning gears in the walls, ship gates, robot parts |
+| Tech | mechanical tiles, saws in the walls, ship gates, robot parts |
 | Effects | shaders, camera moves, screen flips |
-| Hardcore | fast gamemode switches, wave spam, speed changes, orbs |
+| Hardcore | fast gamemode switches, wave spam, dual portals, teleports, orb slams |
 | Chill | calm flow, few switches, soft effects |
 
 The generator never copies a style. Every generation draws random weights over the ticked styles,
@@ -69,14 +72,26 @@ candidates, then annealing cycles that improve the winner. The score is "spectac
 techniques, hitting the strong beats, no repetition. Options where the physics can't honour a
 click are penalised.
 
+**Physics** (`Common.hpp`): GD's own constants, per speed. One unit of GD's velocity is 54 units
+per second and gravity is 2916 units/s², at 240 physics steps per second. Cube jump and gravity
+are set per speed (0.5x to 4x), the fall speed is capped at 810, and every orb and pad (yellow,
+pink, red, blue, black) has its own strength. Ball, robot (hold up to 0.28 s), UFO (click boost,
+two gravity stages, slow fall) and swing (gravity flip that keeps 80% of the speed) are simulated
+step by step with the same numbers.
+
 - **Cube** (`Cube.cpp`):
   - phrase rhythms follow AAAB / AABB / ABAB / ABAC schemes built from the song's real onsets;
   - 24 candidates and 60 improvement steps for every bar;
-  - jumps, yellow / pink / red orbs and pads, dash orbs on long notes;
+  - jumps, yellow / pink / red orbs and pads, dash orbs on long notes, **orb chains** (one orb
+    straight into the next), **black orb slams** down onto the beat;
   - plateaus up to 4 blocks, ledge drops, stairs, pillars;
-  - switching to a ceiling plane with a blue orb or pad (Harder and up); upside down there are
-    only plain jumps and a pause after landing;
+  - switching to a ceiling plane with a blue orb or pad, or snapping there at once with a
+    **spider orb / pad** (Harder and up);
   - techniques the level has already used a lot get penalised.
+- **Dual cube** (`Dual.cpp`, Hexagon Force style): a ceiling closes over the floor, the dual
+  portal splits the cube and the second one falls up onto the ceiling. One button jumps both.
+  Spikes stand on the floor and hang from the ceiling in phrases that alternate, mirror or answer
+  each other, so the player reads two lanes at once.
 - **Ball / Spider** (`Flip.cpp`):
   - flips by click or by a gravity portal;
   - portals only on weaker beats, with calm before and after and no hazards around them;
@@ -85,32 +100,44 @@ click are penalised.
 - **Wave** (`Wave.cpp`):
   - 18 rhythm templates per bar: beats, eighths, offbeats, gallop, clave, syncopation, bursts,
     "slide and rush", echo, follow the onsets and more;
-  - per-bar modifiers: normal, tight, wide or "teeth" corridor, mini size, gravity;
+  - per-bar modifiers: normal, tight, wide or "teeth" corridor, mini size, gravity, and a
+    **teleport** that throws the wave three blocks up or down on the downbeat;
   - the path comes from exact physics: the wave never flies flat and never runs into the ceiling.
-- **Robot** (`Robot.cpp`): the hold length follows the music. Short hits are taps over a
-  spike, held notes (drums or voice) are long jumps over a spike row or a jump up onto a block
-  platform, big accents are yellow pads over a spike pit.
+- **Dual wave** (Blast Processing / Deadlocked style): the wave climbs into a dual portal and a
+  mirrored twin appears. Each wave keeps to its own half with a divider between the corridors.
+  In bars the search marks "cross", the two fly through each other; they meet again on the exit
+  portal.
+- **UFO and swing** (`Flyer.cpp`): the clicks sit on the music (eighths, sixteenths on Demon). A
+  pilot simulates every click and follows a contour per bar (low, middle, high, rise, fall, swell).
+  The corridor pinches on the clicks, saws sit under UFO hops and on the outside of swing turns,
+  and **teleport portals** move the player to another lane on a downbeat.
+- **Robot** (`Robot.cpp`): the hold length follows the music. Short hits are taps over a spike
+  (placed where even the shortest hold clears it). Held notes (drums or voice) are long jumps over
+  a spike row or a jump up onto a one- or two-block platform. Big accents are pads over a pit.
 - **Ship** (`Ship.cpp`):
   - 18 flight templates: waves, zigzag, terraces, climb, dive, straight fly, M, sawtooth, gates,
     squeeze, open air, offbeat dodge, echo and more;
   - every template has its own corridor shape; size and gravity change per bar.
 - **Structure and speed** (`Plan.cpp`):
   - in loud parts the gamemode changes every 2–4 bars (faster in switch-heavy styles); mirror
-    and gravity on drops;
+    and gravity on drops; dual parts in the loud sections;
   - the speed is planned from the song structure: drops and peaks one step faster, the
     breakdown after an intense part one step slower, everything else back at the base speed;
   - two-pass generation for exact sync: the mod first places only the speed portals, asks GD
     itself where the player is at every moment (`LevelEditorLayer::posForTime`), then builds
     all gameplay and effects on that table.
 
+**Corridors** (`Corridor.cpp`): ship, wave, UFO and swing walls are built column by column around
+every lane of the path. The walls hug the path with slopes where it climbs or falls, saws are
+half-buried in the walls, and lanes that split (teleports, dual waves) get a divider between them.
+
 **Design** (`Design.cpp`), learned from RobTop's official levels:
 - every solid block is autotiled from its neighbours: top tiles face the open side, outer
   corners, pillars, caps and inner tiles, each with the rotation / flip RobTop uses;
 - six tilesets (grid, beveled, mech, coloured, outline, black), all with full block hitboxes;
-  every part takes its edges from one set and the inside from another;
-- glow runs along whole edges (the object RobTop uses most), never over a spike;
-- ship and wave walls get tiled faces and glow, chains hang where the corridor is roomy, gears
-  spin buried inside thick walls;
+  one tileset per song section, so the look changes with the music instead of every few blocks;
+- glow only along the faces the player sees (tops of floors, undersides of ceilings, along
+  slopes), never over a spike;
 - all decoration is non-solid, so the design never changes what is playable.
 
 **Effects** (`Effects.cpp`): the whole trigger and shader toolbox except colour grading. The
@@ -135,14 +162,16 @@ Object IDs and property keys are cross-checked with the
 GitHub Actions (`.github/workflows/build.yml`) builds the mod from the `v6` branch of the Geode
 SDK (GD 2.2091) and links it against the Geode 5.11.2 binaries.
 
-Offline test of the analyser and the generator (no GD needed), including corridor and trap checks:
+Offline test of the analyser and the generator (no GD needed). Every gamemode exports the path it
+intends the player to take; the test plays it back against every block, slope, spike and saw on
+all six difficulties, and checks the trigger groups and portals:
 ```bash
 python -m ziglang c++ -std=c++20 -O2 -D_USE_MATH_DEFINES test/offline_test.cpp src/Analysis.cpp src/Generator.cpp src/gen/*.cpp -o offline_test.exe
 ```
 
 ## Limitations
-- Player physics are approximations with safety margins: orb and pad strengths, ball gravity,
-  the push of blue orbs, hitboxes. Play the level before you publish it.
+- The playthrough test follows the intended path; a player who clicks far off the beat can still
+  crash. Play the level before you publish it.
 - GD's fonts have no Cyrillic, so the mod's interface is in English.
 
 ## Credits

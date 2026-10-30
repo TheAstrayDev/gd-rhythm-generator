@@ -116,7 +116,7 @@ void Gen::effects() {
         double x0 = tl.x(s.t0);
         double v = SPEED_UPS[s.speedRank];
         int lv = s.level;
-        bool flying = s.mode == Mode::Ship || s.mode == Mode::Wave;
+        bool flying = flyingMode(s.mode);
         double baseZoom = flying ? 0.92 : 1.0;
         out.add(obj::TrigZoom, x0, laneY + 330).kv(key::Zoom, baseZoom).kv(key::Duration, P).kv(key::Easing, ease::InOut);
 
@@ -386,7 +386,7 @@ void Gen::effects() {
         auto it = std::find_if(segs.begin(), segs.end(), [&](Seg const& sg) { return t0 >= sg.t0 + P && t1 <= sg.t1 - P; });
         if (it == segs.end() || it->level > 2 || it->build || it->g.camera < 0.3 || t1 - t0 < 4 * P) continue;
         if (busy(t0, P) > 0.6) continue;
-        double z = it->mode == Mode::Ship || it->mode == Mode::Wave ? 0.92 : 1.0;
+        double z = flyingMode(it->mode) ? 0.92 : 1.0;
         out.add(obj::TrigZoom, tl.x(t0), laneY + 330).kv(key::Zoom, z * 1.04).kv(key::Duration, 2 * P).kv(key::Easing, ease::SineInOut);
         out.add(obj::TrigZoom, tl.x(t1), laneY + 330).kv(key::Zoom, z).kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
         used("camera leans into vocal phrase");

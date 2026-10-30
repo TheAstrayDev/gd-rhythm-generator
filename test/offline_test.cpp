@@ -8,10 +8,12 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
 #include <random>
+#include <set>
 #include <sstream>
 
 using namespace rg;
@@ -193,7 +195,9 @@ int main(int argc, char** argv) {
     for (int d = 0; d < DIFFICULTY_COUNT; d++) {
         GenOptions o;
         o.difficulty = Difficulty(d);
-        o.seed = 12345 + d;
+        // RG_SEED / RG_STYLE widen the sweep: another seed base, a fixed style mask
+        o.seed = 12345 + d + (std::getenv("RG_SEED") ? uint32_t(std::atoi(std::getenv("RG_SEED"))) : 0);
+        if (char const* st = std::getenv("RG_STYLE")) o.styleMask = uint32_t(std::atoi(st));
         auto r = generate(a, o);
         auto objs = parse(r.objects);
         std::map<int, int> byId;
@@ -225,31 +229,83 @@ int main(int argc, char** argv) {
             }
             std::printf("  sync: %d speed changes, error if portals fired 16 units off: %.1f ms\n", changes, worst * 1000);
         }
-        // corridor sanity: free space between scaled wall blocks in the same column
+        // playthrough check: the paths the generator intends the player to take (cube flights,
+        // dual cubes, every corridor lane) must not touch a solid block, a slope, a spike or a saw
         {
-            std::map<long, std::pair<double, double>> col; // x -> (bottom wall top, top wall bottom)
+            static const std::set<int> slopeIds = {1743, 1745, 305, 1906, 1338, 1747};
+            static const std::map<int, double> sawR = {{1705, 32.3}, {1706, 21.6}, {1707, 12}, {186, 32.3}, {187, 22}, {188, 12.6}};
+            static const std::set<int> solidIds = {1,  2,  3,  83, 7,  6,  70,  71,  94,  75,  74,  77,  78,  76,  82, 81,
+                                                   208, 209, 207, 213, 212, 467, 469, 471, 470, 91, 92, 96, 95};
+            struct Box { double x0, x1, y0, y1; };
+            struct Tri { double x0, y0; bool fx, fy; };
+            struct Saw { double x, y, r; };
+            std::map<long, std::vector<Box>> boxes, spikes;
+            std::map<long, std::vector<Tri>> tris;
+            std::map<long, std::vector<Saw>> saws;
+            auto flag = [](ObjStat const& o, int k) { auto it = o.kv.find(k); return it != o.kv.end() && it->second != 0; };
             for (auto& ob : objs) {
-                if (ob.id != 1 || !ob.kv.count(129)) continue;
-                double h = 30 * ob.kv[129];
-                long x = std::lround(ob.x);
-                auto& c = col.emplace(x, std::make_pair(0.0, 400.0)).first->second;
-                if (ob.y - h / 2 < 1) c.first = std::max(c.first, ob.y + h / 2);
-                else c.second = std::min(c.second, ob.y - h / 2);
+                long k = std::lround(ob.x / 30);
+                if (solidIds.count(ob.id) && !flag(ob, 121)) {
+                    double h = 30 * (ob.kv.count(129) ? ob.kv.at(129) : 1);
+                    boxes[k].push_back({ob.x - 15, ob.x + 15, ob.y - h / 2, ob.y + h / 2});
+                } else if (slopeIds.count(ob.id)) {
+                    tris[k].push_back({ob.x - 15, ob.y - 15, flag(ob, 4), flag(ob, 5)});
+                } else if (ob.id == 8) {
+                    spikes[k].push_back({ob.x - 3, ob.x + 3, ob.y - 6, ob.y + 6});
+                } else if (sawR.count(ob.id)) {
+                    saws[k].push_back({ob.x, ob.y, sawR.at(ob.id)});
+                }
             }
-            double minFree = 1e9;
-            int run = 0, worstRun = 0;
-            long worstX = 0;
-            long prevX = -1000;
-            for (auto& [x, c] : col) {
-                minFree = std::min(minFree, c.second - c.first);
-                bool tunnel = c.second < 70 && c.first < 1; // squeezed against the floor
-                run = tunnel && x - prevX <= 30 ? run + 1 : tunnel ? 1 : 0;
-                if (run > worstRun) worstRun = run, worstX = x;
-                prevX = x;
+            int hits = 0;
+            for (auto& tp : r.trace) {
+                // blocks kill only through GD's inner hitbox (a touch on the outer one lands the
+                // player on top or slides it along), hazards use the full hitbox
+                double hs = tp.half >= 15 ? 9 : tp.half - 0.5, hh = tp.half - 2;
+                long k0 = std::lround(tp.x / 30);
+                char const* what = nullptr;
+                for (long k = k0 - 2; k <= k0 + 2 && !what; k++) {
+                    for (auto& b : boxes[k])
+                        if (tp.x + hs > b.x0 && tp.x - hs < b.x1 && tp.y + hs > b.y0 && tp.y - hs < b.y1) what = "block";
+                    for (auto& t : tris[k]) {
+                        double u0 = tp.x - hs - t.x0, u1 = tp.x + hs - t.x0, w0 = tp.y - hs - t.y0, w1 = tp.y + hs - t.y0;
+                        if (t.fx) std::swap(u0, u1), u0 = 30 - u0, u1 = 30 - u1;
+                        if (t.fy) std::swap(w0, w1), w0 = 30 - w0, w1 = 30 - w1;
+                        u0 = std::max(u0, 0.0), u1 = std::min(u1, 30.0), w0 = std::max(w0, 0.0), w1 = std::min(w1, 30.0);
+                        if (u0 < u1 && w0 < w1 && w0 < u1) what = "slope";
+                    }
+                    for (auto& b : spikes[k])
+                        if (tp.x + hh > b.x0 && tp.x - hh < b.x1 && tp.y + hh > b.y0 && tp.y - hh < b.y1) what = "spike";
+                    for (auto& c : saws[k]) {
+                        double dx = std::max(0.0, std::abs(c.x - tp.x) - hh), dy = std::max(0.0, std::abs(c.y - tp.y) - hh);
+                        if (dx * dx + dy * dy < c.r * c.r) what = "saw";
+                    }
+                }
+                if (what) {
+                    if (hits < 6) std::printf("    path touches a %s at x=%.0f y=%.0f (half %.0f)\n", what, tp.x, tp.y, tp.half);
+                    if (hits == 0 && std::getenv("RG_DEBUG")) {
+                        for (auto& ob : objs) {
+                            if (std::abs(ob.x - tp.x) > 70 || ob.id > 3000 || ob.kv.count(121) || ob.y > 400) continue;
+                            std::printf("      obj %d at (%.1f, %.1f)", ob.id, ob.x, ob.y);
+                            for (auto& [kk, vv] : ob.kv) if (kk == 4 || kk == 5 || kk == 6 || kk == 129) std::printf(" k%d=%g", kk, vv);
+                            std::printf("\n");
+                        }
+                        for (auto& q : r.trace)
+                            if (std::abs(q.x - tp.x) < 60) std::printf("      path (%.0f, %.1f)\n", q.x, q.y);
+                    }
+                    hits++;
+                }
             }
-            std::printf("  corridors: min free %.0f units, longest floor tunnel %d columns\n", col.empty() ? 0.0 : minFree, worstRun);
-            if (!col.empty() && minFree < 34) { std::printf("FAIL: corridor too tight\n"); fails++; }
-            if (worstRun > 12) { std::printf("FAIL: wave/ship stuck in a floor tunnel\n"); fails++; }
+            std::printf("  playthrough: %zu path points checked, %d touch something\n", r.trace.size(), hits);
+            if (r.trace.size() < 200) { std::printf("FAIL: no intended path exported\n"); fails++; }
+            if (hits) { std::printf("FAIL: the intended path runs into objects\n"); fails++; }
+            // portals must not pile up: a teleport never shares its spot with a speed column
+            int piles = 0;
+            for (auto& tp : objs) {
+                if (tp.id != 747) continue;
+                for (auto& sp : objs)
+                    if ((sp.id == 200 || sp.id == 201 || sp.id == 202 || sp.id == 203 || sp.id == 1334) && std::abs(sp.x - tp.x) < 40) piles++;
+            }
+            if (piles) { std::printf("FAIL: %d speed portals sit on a teleport\n", piles); fails++; }
         }
         // move-trigger offsets per group must cancel out before the player passes the group
         // (afterwards things may collapse away behind the player)

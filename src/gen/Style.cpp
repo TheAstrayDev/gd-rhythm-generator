@@ -12,11 +12,11 @@ char const* styleName(int id) {
     return names[std::clamp(id, 0, STYLE_COUNT - 1)];
 }
 
-// Presets distilled from how GD levels look: RobTop's official levels (grid / beveled tiles,
-// glow lining every edge, chains and gears), modern layouts (outline blocks, little deco,
-// moving structures), neon (coloured blocks drowned in glow and flashes), tech (mechanical
-// blocks, spinning gears in the walls, ship gates, robot), effect showcases, hardcore
-// switch-ups and chill flow levels.
+// Presets distilled from how GD levels look and play: RobTop's official levels (grid / beveled
+// tiles, glow lining the edges, ufo parts), modern layouts (outline blocks and slopes, little
+// deco, swing, teleports, black-orb slams), neon (coloured blocks drowned in glow and flashes),
+// tech (mechanical blocks, saws, ship gates, robot), effect showcases, hardcore switch-ups
+// (dual portals, wave spam, slams) and chill flow levels.
 Genome stylePreset(int id) {
     Genome g;
     auto tiles = [&](double grid, double bev, double mech, double col, double outl, double black) {
@@ -26,53 +26,60 @@ Genome stylePreset(int id) {
     switch (id) {
         case StClassic:
             tiles(0.9, 0.8, 0.2, 0.1, 0.1, 0.4);
-            g.glow = 0.7, g.chains = 0.6, g.gears = 0.4, g.wallDeco = 0.5, g.blockDesign = 0.9;
+            g.glow = 0.7, g.slopes = 0.5, g.saws = 0.3, g.blockDesign = 0.9;
             g.fx = 0.3, g.camera = 0.3, g.flashes = 0.5, g.screenFlip = 0.05, g.mirror = 0.2, g.entrances = 0.3;
             g.switchRate = 0.4, g.speedVariety = 0.5, g.orbs = 0.5, g.pads = 0.7, g.platforms = 0.6;
             g.planeFlips = 0.3, g.robot = 0.5, g.waveSpam = 0.3, g.shipGates = 0.3;
+            g.dual = 0.4, g.flyers = 0.5, g.teleports = 0.2, g.slams = 0.3;
             break;
         case StModern:
             tiles(0.1, 0.2, 0.2, 0.2, 0.9, 0.5);
-            g.glow = 0.3, g.chains = 0.1, g.gears = 0.2, g.wallDeco = 0.3, g.blockDesign = 0.7;
+            g.glow = 0.3, g.slopes = 0.8, g.saws = 0.5, g.blockDesign = 0.7;
             g.fx = 0.5, g.camera = 0.6, g.flashes = 0.4, g.screenFlip = 0.2, g.mirror = 0.3, g.entrances = 0.9;
             g.switchRate = 0.6, g.speedVariety = 0.6, g.orbs = 0.6, g.pads = 0.4, g.platforms = 0.8;
             g.planeFlips = 0.6, g.robot = 0.3, g.waveSpam = 0.4, g.shipGates = 0.5;
+            g.dual = 0.5, g.flyers = 0.7, g.teleports = 0.6, g.slams = 0.6;
             break;
         case StNeon:
             tiles(0.1, 0.1, 0.1, 0.9, 0.4, 0.2);
-            g.glow = 1.0, g.chains = 0.1, g.gears = 0.2, g.wallDeco = 0.8, g.blockDesign = 0.8;
+            g.glow = 1.0, g.slopes = 0.6, g.saws = 0.4, g.blockDesign = 0.8;
             g.fx = 0.7, g.camera = 0.5, g.flashes = 0.9, g.screenFlip = 0.2, g.mirror = 0.3, g.entrances = 0.7;
             g.switchRate = 0.6, g.speedVariety = 0.5, g.orbs = 0.6, g.pads = 0.5, g.platforms = 0.5;
             g.planeFlips = 0.4, g.robot = 0.3, g.waveSpam = 0.6, g.shipGates = 0.4;
+            g.dual = 0.5, g.flyers = 0.5, g.teleports = 0.5, g.slams = 0.4;
             break;
         case StTech:
             tiles(0.2, 0.2, 1.0, 0.2, 0.3, 0.4);
-            g.glow = 0.4, g.chains = 0.5, g.gears = 1.0, g.wallDeco = 1.0, g.blockDesign = 0.9;
+            g.glow = 0.4, g.slopes = 0.5, g.saws = 0.9, g.blockDesign = 0.9;
             g.fx = 0.4, g.camera = 0.4, g.flashes = 0.4, g.screenFlip = 0.15, g.mirror = 0.2, g.entrances = 0.6;
             g.switchRate = 0.5, g.speedVariety = 0.5, g.orbs = 0.4, g.pads = 0.5, g.platforms = 0.7;
             g.planeFlips = 0.4, g.robot = 0.8, g.waveSpam = 0.4, g.shipGates = 0.9;
+            g.dual = 0.4, g.flyers = 0.4, g.teleports = 0.6, g.slams = 0.5;
             break;
         case StEffects:
             tiles(0.3, 0.3, 0.3, 0.5, 0.5, 0.4);
-            g.glow = 0.7, g.chains = 0.2, g.gears = 0.3, g.wallDeco = 0.5, g.blockDesign = 0.6;
+            g.glow = 0.7, g.slopes = 0.6, g.saws = 0.4, g.blockDesign = 0.6;
             g.fx = 1.0, g.camera = 1.0, g.flashes = 0.9, g.screenFlip = 0.7, g.mirror = 0.6, g.entrances = 1.0;
             g.switchRate = 0.5, g.speedVariety = 0.7, g.orbs = 0.5, g.pads = 0.5, g.platforms = 0.5;
             g.planeFlips = 0.5, g.robot = 0.3, g.waveSpam = 0.4, g.shipGates = 0.4;
+            g.dual = 0.6, g.flyers = 0.5, g.teleports = 0.7, g.slams = 0.5;
             break;
         case StHardcore:
             tiles(0.2, 0.3, 0.4, 0.3, 0.4, 0.8);
-            g.glow = 0.3, g.chains = 0.2, g.gears = 0.3, g.wallDeco = 0.4, g.blockDesign = 0.6;
+            g.glow = 0.3, g.slopes = 0.7, g.saws = 0.7, g.blockDesign = 0.6;
             g.fx = 0.4, g.camera = 0.5, g.flashes = 0.5, g.screenFlip = 0.4, g.mirror = 0.6, g.entrances = 0.6;
             g.switchRate = 1.0, g.speedVariety = 0.9, g.orbs = 0.9, g.pads = 0.5, g.platforms = 0.6;
             g.planeFlips = 0.8, g.robot = 0.5, g.waveSpam = 1.0, g.shipGates = 0.7;
+            g.dual = 0.9, g.flyers = 0.7, g.teleports = 0.8, g.slams = 0.9;
             break;
         case StChill:
         default:
             tiles(0.5, 0.6, 0.2, 0.4, 0.3, 0.3);
-            g.glow = 0.6, g.chains = 0.3, g.gears = 0.3, g.wallDeco = 0.4, g.blockDesign = 0.8;
+            g.glow = 0.6, g.slopes = 0.6, g.saws = 0.1, g.blockDesign = 0.8;
             g.fx = 0.2, g.camera = 0.2, g.flashes = 0.3, g.screenFlip = 0.0, g.mirror = 0.05, g.entrances = 0.4;
             g.switchRate = 0.15, g.speedVariety = 0.2, g.orbs = 0.4, g.pads = 0.5, g.platforms = 0.5;
             g.planeFlips = 0.1, g.robot = 0.3, g.waveSpam = 0.1, g.shipGates = 0.2;
+            g.dual = 0.2, g.flyers = 0.5, g.teleports = 0.1, g.slams = 0.1;
             break;
     }
     return g;

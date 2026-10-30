@@ -2,7 +2,8 @@
 
 // ---------------------------------------------------------------------------------------
 // Wave: a library of 18 per-bar rhythm templates (where the wave turns) x corridor styles
-// (normal / tight / wide / teeth) x size (normal / mini) x gravity flips.
+// (normal / tight / wide / teeth) x size (normal / mini) x gravity flips x teleports (the wave
+// is thrown ~3 blocks up or down on the downbeat and the corridor splits there).
 //
 // Every bar of a wave part picks one combination. The path is simulated exactly (45 or
 // 63 degree slopes, sliding on the floor); if a template would drive the wave into the
@@ -47,12 +48,217 @@ constexpr int WAVE_TPL_COUNT = int(sizeof(WAVE_TPL) / sizeof(WAVE_TPL[0]));
 enum GapStyle { GNormal, GTight, GWide, GTeeth, GAP_COUNT };
 constexpr char const* GAP_NAMES[] = {"wave corridor normal", "wave corridor tight", "wave corridor wide", "wave teeth"};
 
-struct BarChoice { int tpl = 0, gap = 0; bool mini = false, grav = false; };
+struct BarChoice { int tpl = 0, gap = 0; bool mini = false, grav = false, tp = false; };
+
+// toggle times of a template in one bar
+std::vector<double> templateToggles(int tpl, int prevTpl, double bar, double P, bool allow16,
+                                    std::function<float(double)> const& onset) {
+    std::vector<double> ts;
+    int mask = WAVE_TPL[tpl].mask;
+    if (mask == -2) mask = prevTpl >= 0 ? WAVE_TPL[prevTpl].mask : WAVE_TPL[0].mask;
+    for (int k = 0; k < 16; k++) {
+        if (k % 2 && !allow16) continue;
+        double t = bar + k * P / 4;
+        if (mask == -1 ? (onset(t) > 0.35f || k % 4 == 0) : mask >= 0 && (mask & (1 << k))) ts.push_back(t);
+    }
+    return ts;
+}
 
 } // namespace
 
+// ---------------------------------------------------------------------------------------
+// Dual wave (Blast Processing / Deadlocked style): the wave climbs into a dual portal; the
+// second wave appears there with reversed gravity, so the two fly mirrored around the
+// portal's height - one button, two corridors. They split apart, cross through each other,
+// and meet again on the exit portal. The divider between the corridors comes from the
+// corridor builder wherever the two separate. If the first wave is a bit off its path when it
+// enters, the second one is off by the same amount (mirror axis and path shift together), so
+// both keep the full tolerance of their corridor.
+// ---------------------------------------------------------------------------------------
+void Gen::genDualWave(size_t si) {
+    auto& s = segs[si];
+    double v = SPEED_UPS[s.speedRank];
+    double P = beatLen();
+    const double yc = 150, umax = 128, ylo = 15;
+    double a = s.t0 + 0.45;
+    double tUp = -1;
+    for (double bt : beats) if (bt >= a) { tUp = bt; break; }
+    double td = tUp + (yc - ylo) / v;                  // reaches the dual portal
+    double tz = s.t1 - 1.5 * P - (umax + yc) / v;      // the last moment the dual part turns home
+    std::vector<double> bars;
+    for (size_t k = 0; k < beats.size(); k++) if (down[k] && beats[k] > td && beats[k] < tz) bars.push_back(beats[k]);
+    if (tUp < 0 || bars.size() < 2) { s.dual = false; return; }
+    int nBars = int(bars.size());
+    bool allow16 = diff() >= 4;
+    double minGap = std::max(D.minGap, 0.1);
+    auto onset = [&](double t) { return A.onsetAt(mt(t), 0.03); };
+
+    // each wave keeps to its own half (|u| between uin and umax), so a divider stands between
+    // the corridors; only bars marked "cross" let the waves pass through each other, once
+    const double gapBase = D.waveGap * 1.1, uin = gapBase / 2 + 4;
+    struct DualPath { std::vector<double> ts, us; double te = 0; int toggles = 0, repairs = 0, crossings = 0, skipped = 0; double score = -1e18; bool feasible = true; };
+    auto build = [&](std::vector<int> const& tpl, std::vector<char> const& cross) {
+        DualPath w;
+        double t = td, u = 0, lastToggle = td;
+        int dir = 1, side = 1;
+        bool crossed = false;
+        w.ts = {td}, w.us = {0};
+        double sync = 0, sep = 0;
+        auto at = [&](double ct) { return u + dir * v * (ct - t); };
+        auto toggleAt = [&](double ct) {
+            u = at(ct), t = ct, dir = -dir, lastToggle = ct;
+            sep = std::max(sep, std::abs(u));
+            w.ts.push_back(t), w.us.push_back(u);
+            w.toggles++;
+        };
+        // a forced turn goes on the last eighth (or sixteenth) before the bound, so it still
+        // sits on the music
+        auto onGrid = [&](double hit) {
+            for (double g : {P / 2, P / 4}) {
+                double q = bars[0] + std::floor((hit - bars[0]) / g + 1e-9) * g;
+                if (q > lastToggle + 0.06 && q > t) return q;
+            }
+            return hit;
+        };
+        // run on to ct: turn before the outer wall and before the divider, or cross over once
+        auto repairUntil = [&](double ct, bool crossOk) {
+            for (int guard = 0; guard < 400; guard++) {
+                double hit;
+                if (dir == side) hit = t + (umax - side * u) / v;
+                else if (crossOk && !crossed) {
+                    double zero = t + side * u / v;
+                    if (zero >= ct) break;
+                    u = 0, t = zero, side = -side, crossed = true;
+                    w.crossings++;
+                    continue;
+                } else hit = t + (side * u - uin) / v;
+                if (hit >= ct || hit <= lastToggle + 0.06) break;
+                toggleAt(onGrid(hit));
+                w.repairs++;
+            }
+        };
+        std::set<int> usedT;
+        int repeats = 0;
+        for (int i = 0; i < nBars; i++) {
+            usedT.insert(tpl[size_t(i)]);
+            if (i && tpl[size_t(i)] == tpl[size_t(i - 1)]) repeats++;
+            crossed = false;
+            for (double ct : templateToggles(tpl[size_t(i)], i ? tpl[size_t(i - 1)] : -1, bars[size_t(i)], P, allow16, onset)) {
+                if (ct >= tz) break;
+                repairUntil(ct, cross[size_t(i)]);
+                if (ct - lastToggle < minGap) continue;
+                // still between the divider's edges (just split or just crossed): no turning back
+                if (dir == side && side * at(ct) < uin) { w.skipped++; continue; }
+                sync += onset(ct);
+                toggleAt(ct);
+            }
+        }
+        repairUntil(tz, false);
+        // home: head for the middle and meet on the exit portal
+        if (std::abs(at(tz)) > 1 && dir == side) toggleAt(std::max(tz, t));
+        double uz = at(std::max(tz, t));
+        w.te = std::max(tz, t) + std::abs(uz) / v;
+        w.ts.push_back(w.te), w.us.push_back(0);
+        for (double uu : w.us) if (std::abs(uu) > umax + 1) w.feasible = false;
+        double crossWant = std::max(1.0, nBars / 4.0);
+        w.score = 3.0 * usedT.size() - 4.0 * repeats + 1.5 * sync + 5.0 * std::min<double>(w.crossings, crossWant)
+                  - 4.0 * std::max(0.0, w.crossings - crossWant) + sep / 20 - 3.0 * w.repairs - 0.5 * w.skipped
+                  - (w.feasible ? 0.0 : 1000.0);
+        return w;
+    };
+    auto randomTpl = [&]() {
+        int t;
+        do t = rndInt(WAVE_TPL_COUNT); while ((WAVE_TPL[t].needs16 && !allow16) || WAVE_TPL[t].slide);
+        return t;
+    };
+    std::vector<int> bestT, cur;
+    std::vector<char> bestX, curX;
+    DualPath best;
+    for (int c = 0; c < 20; c++) {
+        std::vector<int> ch;
+        std::vector<char> cx;
+        for (int i = 0; i < nBars; i++) ch.push_back(randomTpl()), cx.push_back(i > 0 && rnd() < 0.3);
+        auto w = build(ch, cx);
+        if (w.score > best.score) best = std::move(w), bestT = ch, bestX = cx;
+    }
+    cur = bestT, curX = bestX;
+    double curScore = best.score;
+    for (int r = 0; r < 150; r++) {
+        double temp = 2.0 * (1.0 - r / 150.0);
+        auto ch = cur;
+        auto cx = curX;
+        size_t k = size_t(rndInt(nBars));
+        if (rnd() < 0.3 && k > 0) cx[k] = !cx[k];
+        else ch[k] = randomTpl();
+        auto w = build(ch, cx);
+        if (w.score > curScore || rnd() < std::exp((w.score - curScore) / std::max(0.05, temp))) cur = ch, curX = cx, curScore = w.score;
+        if (w.score > best.score) best = std::move(w), bestT = ch, bestX = cx;
+    }
+    if (!best.feasible) { s.dual = false; return; } // the waves could not be kept in their halves
+    for (int t : bestT) used(WAVE_TPL[t].name);
+    clicks += best.toggles + 2;
+
+    // ---- the two lanes --------------------------------------------------------------------
+    double gap = gapBase;
+    auto gapAt = [&](double t) {
+        double pinch = 0;
+        for (size_t q = 0; q < beats.size(); q++) {
+            if (std::abs(beats[q] - t) > 0.15) continue;
+            double d = (t - beats[q]) / 0.06;
+            pinch = std::max(pinch, (gap - 44) * 0.35 * double(kickAt(beats[q])) * std::exp(-d * d));
+        }
+        return std::max(44.0, gap - pinch);
+    };
+    Lane one, two;
+    one.add(s.t0, ylo, std::max(gap, 110.0));
+    one.add(tUp, ylo, std::max(gap, 110.0));
+    one.add(td - 0.02, yc - v * 0.02, gap);
+    for (size_t i = 0; i + 1 < best.ts.size(); i++) {
+        double t0 = best.ts[i], t1 = best.ts[i + 1];
+        int n = std::max(1, int((t1 - t0) / 0.02));
+        for (int k = 0; k < n; k++) {
+            double t = t0 + (t1 - t0) * k / n, u = best.us[i] + (best.us[i + 1] - best.us[i]) * double(k) / n;
+            one.add(t, yc + u, gapAt(t));
+            two.add(t, yc - u, gapAt(t));
+        }
+    }
+    double te = best.te;
+    one.add(te, yc, gapAt(te));
+    two.add(te, yc, gapAt(te));
+    // after the exit portal the wave dives back to the floor and slides out
+    int lastDir = best.us.size() >= 2 && best.us[best.us.size() - 2] < 0 ? 1 : -1; // heading into the middle
+    double tTurn = te, yTurn = yc;
+    if (lastDir > 0) { tTurn = te + 0.12; yTurn = yc + v * 0.12; one.add(tTurn, yTurn, gap); }
+    double tFloor = tTurn + (yTurn - ylo) / v;
+    one.add(tFloor, ylo, std::max(gap, 110.0));
+    one.add(s.t1 + 1, ylo, std::max(gap, 110.0));
+    if (tFloor > s.t1 - 0.2) { s.dual = false; return; } // no room to come home: plain wave instead
+    // saws on the outer walls at the widest splits
+    if (s.g.saws > 0.3) {
+        auto spec = SAWS[s.g.saws > 0.7 ? 1 : 0];
+        for (size_t i = 1; i + 1 < best.ts.size(); i++) {
+            if (std::abs(best.us[i]) < umax - 25 || rnd() > s.g.saws) continue;
+            bool up = best.us[i] > 0;
+            one.bites.push_back({best.ts[i], up, spec.first, spec.second});
+            two.bites.push_back({best.ts[i], !up, spec.first, spec.second});
+        }
+    }
+    one.half = two.half = 5;
+    corridor(si, {one, two}, tl.x(s.t0) + 75, std::min(tl.x(s.t1) - 30, tl.x(tFloor + 0.2)));
+    out.add(obj::PortalDual, tl.x(td), yc);
+    out.add(obj::PortalDualOff, tl.x(te), yc);
+    used("dual wave");
+    if (best.crossings) features["dual wave crossings"] += best.crossings;
+    if (best.repairs) features["dual wave auto-turns"] += best.repairs;
+    features["dual wave turns"] += best.toggles;
+}
+
 void Gen::genWave(size_t si) {
     auto& s = segs[si];
+    if (s.dual) {
+        genDualWave(si);
+        if (s.dual) return;
+    }
     double v = SPEED_UPS[s.speedRank];
     double P = beatLen();
     const double ylo = 15, yhi = 210;
@@ -66,6 +272,7 @@ void Gen::genWave(size_t si) {
     int nBars = int(bars.size());
     bool miniOk = !s.mini && diff() >= 3 && s.level >= 2 && v * 2 * (P / 2) <= 210;
     bool gravOk = diff() >= 2 && s.level >= 2;
+    bool tpOk = diff() >= 3 || (diff() == 2 && s.level >= 2);
 
     // the toggle times a choice asks for in bar i
     auto barToggles = [&](int i, BarChoice const& c, BarChoice const* prev) {
@@ -94,6 +301,8 @@ void Gen::genWave(size_t si) {
         std::vector<double> ts, ys;
         std::vector<SizeChange> sizes;
         std::vector<GravFlip> gravs;
+        std::vector<size_t> tpIdx;            // first point after each teleport
+        std::vector<double> tpT, tpY, tpDy;   // portal time, height, jump
         int toggles = 0, repairs = 0;
         double endFloor = 0; // when the wave touches the floor for the last time
         double score = -1e18;
@@ -133,6 +342,24 @@ void Gen::genWave(size_t si) {
                 double gy = std::clamp(y + dir * vy * (bars[size_t(i)] - t), ylo, yhi);
                 gravUp = !gravUp;
                 w.gravs.push_back({bars[size_t(i)], gy, gravUp});
+            }
+            // teleport on the downbeat: the wave keeps its heading, ~3 blocks up or down
+            double bt = bars[size_t(i)];
+            if (c.tp && tpOk && !c.grav && bt > a + 2 * P && bt < b - 3 * P && bt - lastToggle > 0.05 && !nearSpeedNet(bt, P)) {
+                double yb = std::clamp(y + dir * vy * (bt - t), ylo, yhi);
+                double dy = yb < (ylo + yhi) / 2 ? 95.0 : -95.0;
+                if (yb + dy >= ylo + 20 && yb + dy <= yhi - 30) {
+                    if (dir < 0 && y - vy * (bt - t) < ylo) {
+                        double tf = t + (y - ylo) / vy;
+                        floorIdle += bt - tf;
+                        w.ts.push_back(tf), w.ys.push_back(ylo);
+                    }
+                    w.ts.push_back(bt), w.ys.push_back(yb);
+                    w.tpIdx.push_back(w.ts.size());
+                    w.tpT.push_back(bt), w.tpY.push_back(yb), w.tpDy.push_back(dy);
+                    w.ts.push_back(bt), w.ys.push_back(yb + dy);
+                    t = bt, y = yb + dy, lastToggle = bt; // no turn before the portal after this
+                }
             }
             for (size_t j = 0; j <= want.size(); j++) {
                 double ct = j < want.size() ? want[j] : barEnd;
@@ -196,7 +423,8 @@ void Gen::genWave(size_t si) {
         w.score = 3.0 * used_.size() + 1.5 * gapsUsed.size() - 4.0 * repeats + 1.5 * sync + var / 8.0
                   + 3.0 * (s.g.waveSpam - 0.5) * spamBias
                   - 3.0 * w.repairs - 2.5 * std::max(0.0, floorIdle - slideBonus * 2 * P)
-                  + 2.0 * std::min<size_t>(w.sizes.size(), 4) + 2.0 * std::min<size_t>(w.gravs.size(), 3);
+                  + 2.0 * std::min<size_t>(w.sizes.size(), 4) + 2.0 * std::min<size_t>(w.gravs.size(), 3)
+                  + 3.0 * std::min<size_t>(w.tpDy.size(), 3) * s.g.teleports;
         return w;
     };
 
@@ -206,6 +434,7 @@ void Gen::genWave(size_t si) {
         c.gap = rndInt(GAP_COUNT);
         c.mini = miniOk && rnd() < 0.3;
         c.grav = gravOk && rnd() < 0.12;
+        c.tp = tpOk && rnd() < 0.05 + 0.15 * s.g.teleports;
         return c;
     };
     std::vector<BarChoice> bestCh;
@@ -228,7 +457,8 @@ void Gen::genWave(size_t si) {
             if (m < 0.55) { auto n = randomChoice(); c.tpl = n.tpl; }
             else if (m < 0.8) c.gap = rndInt(GAP_COUNT);
             else if (m < 0.92) c.mini = miniOk && !c.mini;
-            else c.grav = gravOk && !c.grav;
+            else if (m < 0.96) c.grav = gravOk && !c.grav;
+            else c.tp = tpOk && !c.tp;
             auto w = build(ch);
             if (w.score > curScore || rnd() < std::exp((w.score - curScore) / std::max(0.05, temp))) cur = ch, curScore = w.score;
             if (w.score > best.score) best = std::move(w), bestCh = ch, accepted++;
@@ -259,6 +489,10 @@ void Gen::genWave(size_t si) {
         out.add(g.up ? obj::PortalGravityUp : obj::PortalGravityDown, tl.x(g.t), std::clamp(g.y, 45.0, 190.0));
         used("gravity portal");
     }
+    for (size_t k = 0; k < best.tpT.size(); k++) {
+        out.add(obj::Teleport, tl.x(best.tpT[k]), std::clamp(best.tpY[k], 45.0, 255.0)).kv(key::TeleportOffset, best.tpDy[k]);
+        used("wave teleport");
+    }
 
     // corridor: per-bar style; teeth = sharp narrow bites on every turn
     std::vector<std::pair<double, double>> pinches;
@@ -288,7 +522,9 @@ void Gen::genWave(size_t si) {
         return std::max(miniAt(t) ? 34.0 : 44.0, base - p);
     };
     std::vector<double> ts2, ys2, gs2;
+    std::vector<size_t> tpIdx2;
     for (size_t i = 0; i + 1 < ts.size(); i++) {
+        if (tpIdx2.size() < best.tpIdx.size() && i == best.tpIdx[tpIdx2.size()]) tpIdx2.push_back(ts2.size());
         int n = std::max(1, int((ts[i + 1] - ts[i]) / 0.02));
         for (int k = 0; k < n; k++) {
             double tt = ts[i] + (ts[i + 1] - ts[i]) * k / n;
@@ -301,7 +537,8 @@ void Gen::genWave(size_t si) {
     ts2.push_back(ts.back()), ys2.push_back(ys.back()), gs2.push_back(gapAt(ts.back()));
     // the corridor ends soon after the final landing: the wave slides out on open ground
     double wallEnd = std::min(tl.x(s.t1) - 30, tl.x(best.endFloor + 0.2));
-    walls2(si, ts2, ys2, gs2, tl.x(s.t0) + 75, std::max(tl.x(s.t0) + 75, wallEnd));
+    while (tpIdx2.size() < best.tpIdx.size()) tpIdx2.push_back(ts2.size() - 1);
+    corridor(si, splitAtTeleports(ts2, ys2, gs2, tpIdx2, best.tpDy, 5), tl.x(s.t0) + 75, std::max(tl.x(s.t0) + 75, wallEnd));
     used(s.mini ? "mini wave" : "wave");
 }
 

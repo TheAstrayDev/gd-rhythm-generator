@@ -9,17 +9,18 @@
 //                      like the music does
 //   bar             -> ~16 candidate realisations of that rhythm are simulated:
 //                      every click gets an intent (jump / pad / orb / gravity flip / dash /
-//                      drop off a ledge) and a target height from one of 7 contours
-//                      (flat, stairs, high plateau, pillars, mountain, walk, cliff)
+//                      drop off a ledge / black-orb slam) and a target height from one of 7
+//                      contours (flat, stairs, high plateau, pillars, mountain, walk, cliff)
 //   score           -> the most spectacular PLAYABLE candidate wins: variety of actions,
-//                      height changes, plane switches, orbs / pads / dashes, clicks on strong
-//                      onsets, novelty against the previous bars, penalties for clicks the
-//                      physics could not honour
+//                      height changes, plane switches, orbs / pads / dashes, orb chains, clicks
+//                      on strong onsets, novelty against the previous bars, penalties for
+//                      clicks the physics could not honour
 //
-// Two planes: the floor, and a ceiling plane the cube reaches with a blue pad / blue orb and
-// runs on upside down (hanging spikes and pillars), then flips back. Every flight is
-// simulated in the local frame of its plane; hazards are placed only where the simulated
-// player is clear of them, platforms where it lands.
+// Two planes: the floor, and a ceiling plane the cube reaches with a blue pad / blue orb (an arc
+// across) or a spider pad / spider orb (an instant snap), runs on upside down (hanging spikes
+// and pillars), then flips back. Every flight is simulated in the local frame of its plane with
+// GD's own physics for the part's speed (Common.hpp); hazards are placed only where the
+// simulated player is clear of them, platforms where it lands.
 // ---------------------------------------------------------------------------------------
 
 namespace rg::gen {
@@ -27,13 +28,11 @@ namespace rg::gen {
 namespace {
 
 enum Plane { Floor = 0, Ceil = 1 };
-enum Intent { IJump, IPad, IOrb, IFlip, IDash, IDrop };
+enum Intent { IJump, IPad, IOrb, IFlip, IDash, IDrop, IBlack, INTENT_COUNT };
 enum Obst { ObSpikes, ObBlocks, ObMixed, ObSpikeBlock };
 enum Contour { CFlat, CStairs, CHigh, CPillars, CMountain, CWalk, CCliff, CONTOUR_COUNT };
 
-constexpr double CEIL_Y = 120;     // world y of the ceiling plane's surface (4 blocks: stays on screen)
-constexpr double FLIP_PUSH = 0.35; // blue pad / orb push towards the new surface (x CUBE_V)
-constexpr int OrbBlue = 84, PadBlue = 67;
+constexpr double CEIL_Y = 120; // world y of the ceiling plane's surface (4 blocks: stays on screen)
 
 struct Arc {
     double t0, y0, v0, tEnd; // local frame: y = distance from the plane's surface
@@ -47,22 +46,9 @@ struct Flight {
     bool special, flip;
     Obst obstacle;
 };
-struct Pillar { double x0, x1, h, t; Plane plane; };
+struct Pillar { double x0, x1, h, t; Plane plane; bool drop = false; };
 struct Placed { int id; double t, x, localY; Plane plane; bool upper; };
 struct Span { double x0, x1; };
-
-double yOf(Arc const& r, double t) {
-    if (r.dash) return r.y0;
-    double d = t - r.t0;
-    return r.y0 + r.v0 * d - 0.5 * CUBE_G * d * d;
-}
-double vOf(Arc const& r, double t) { return r.dash ? 0 : r.v0 - CUBE_G * (t - r.t0); }
-double fallTime(double y0, double v0, double h) {
-    double disc = v0 * v0 + 2 * CUBE_G * (y0 - h);
-    if (disc < 0) disc = 0;
-    return (v0 + std::sqrt(disc)) / CUBE_G;
-}
-double apexOf(double y0, double v0) { return v0 > 0 ? y0 + v0 * v0 / (2 * CUBE_G) : y0; }
 
 struct Click { double t; float sustain; float strength; };
 
@@ -79,7 +65,7 @@ struct Sim {
     int clicks = 0;
     std::map<std::string, int> used;
     // per-bar score accumulators
-    int kinds = 0, heightChanges = 0, flips = 0, specials = 0, skipped = 0;
+    int kinds = 0, heightChanges = 0, flips = 0, specials = 0, skipped = 0, chains = 0;
     double sync = 0;
     std::string sig;
 };
@@ -98,6 +84,16 @@ void Gen::genCube(size_t si) {
     int maxH = dif == 0 ? 1 : dif == 1 ? 2 : 4;
     bool allowFlip = dif >= 3 && lv >= 2; // plane switches: Harder+, intense parts only
     bool allowDash = D.orbs && dif >= 1;
+    bool allowSlam = D.orbs && dif >= 2;   // black orbs
+    bool spiderOk = dif >= 3 && rnd() < 0.3 + 0.7 * s.g.slams; // spider pads / orbs for plane switches
+
+    // GD's cube physics at this part's speed
+    Ballistic ph{CUBE_PHYS[s.speedRank].g};
+    const double JUMP = CUBE_PHYS[s.speedRank].v;
+    auto yOf = [&](Arc const& r, double t) { return r.dash ? r.y0 : ph.y(r.y0, r.v0, t - r.t0); };
+    auto vOf = [&](Arc const& r, double t) { return r.dash ? 0.0 : ph.v(r.v0, t - r.t0); };
+    auto fallTime = [&](double y0, double v0, double h) { return ph.fall(y0, v0, h); };
+    auto apexOf = [&](double y0, double v0) { return ph.apex(y0, v0); };
 
     // ---- rhythm: phrases of 4 bars with repeating motifs ----------------------------
     auto slotAllowed = [&](int k) {
@@ -171,16 +167,24 @@ void Gen::genCube(size_t si) {
         if (S.plane == Ceil && (S.ceil.empty() || S.ceil.back().x1 < 1e17))
             S.ceil.push_back({tl.x(S.lastLand) - 60, 1e18});
     };
-    auto closePillar = [&](Sim& S, double x) {
-        if (!S.pillars.empty() && S.pillars.back().x1 > 1e17) S.pillars.back().x1 = x;
+    auto closePillar = [&](Sim& S, double x, bool drop = false) {
+        if (!S.pillars.empty() && S.pillars.back().x1 > 1e17) S.pillars.back().x1 = x, S.pillars.back().drop = drop;
     };
-    // flip gravity at time t from the current state; returns false if not possible
-    auto flipAt = [&](Sim& S, double t, bool grounded) {
+    // flip gravity at time t from the current state; returns false if not possible. A blue pad /
+    // orb sends the cube across in an arc, a spider pad / orb snaps it to the other plane at once.
+    auto flipAt = [&](Sim& S, double t, bool grounded, bool spider) {
         if (t - S.lastFlip < 2 * P) return false;
         // only from the ground or a low hop: a high start would clip the ceiling plane
         if (S.plane == Floor && grounded && S.surf > 0) return false;
         if (S.plane == Floor && !grounded && yOf(S.flights.back().arcs.back(), t) > 60) return false;
         Plane np = S.plane == Floor ? Ceil : Floor;
+        // the ceiling starts one block before the flip: the arc leading in must pass under it
+        if (S.plane == Floor && !grounded) {
+            double xf = tl.x(t);
+            for (auto& r : S.flights.back().arcs)
+                for (double tt = r.t0; tt <= std::min(r.tEnd, t); tt += 0.004)
+                    if (tl.x(tt) > xf - 50 && yOf(r, tt) > CEIL_Y - 36) return false;
+        }
         double yl = 0, vl = 0;
         if (!grounded) {
             auto& cur = S.flights.back().arcs.back();
@@ -189,28 +193,32 @@ void Gen::genCube(size_t si) {
         // local height above the old surface -> world bottom -> local height in the new frame
         double yb = S.plane == Floor ? yl : CEIL_Y - 30 - yl;
         double ny = np == Floor ? yb : CEIL_Y - 30 - yb;
-        double nv = -vl - FLIP_PUSH * CUBE_V;
+        // the flip halves the speed: blue orb 0.8 -> 0.4 x jump, blue pad 0.4 x pad push
+        double nv = grounded ? -PAD_BLUE * PAD_V : -ORB_BLUE * JUMP;
+        (void)vl;
         if (ny < 5) return false;
         double x = tl.x(t);
         Arc arc{t, ny, nv, t + fallTime(ny, nv, 0), true, false, np};
+        if (spider) arc = {t, 0, 0, t, true, false, np}; // already on the other plane
         if (grounded) {
             closePillar(S, x + 10);
             S.flights.push_back({{arc}, S.surf, 0, true, true, ObSpikes});
-            S.placed.push_back({PadBlue, t, x + 22, S.surf + 4, S.plane, false});
+            S.placed.push_back({spider ? obj::PadSpider : obj::PadBlue, t, x + 22, S.surf + 4, S.plane, false});
             S.flying = true;
         } else {
             auto& f = S.flights.back();
             f.arcs.back().tEnd = t;
             f.arcs.push_back(arc);
             f.landH = 0, f.flip = true, f.special = true;
-            S.placed.push_back({OrbBlue, t, x, yl + PLAYER_HALF, S.plane, true});
+            S.placed.push_back({spider ? obj::OrbSpider : obj::OrbBlue, t, x, yl + PLAYER_HALF, S.plane, true});
             S.clicks++;
         }
         if (np == Ceil) S.ceil.push_back({x - 15, 1e18});
         else if (!S.ceil.empty() && S.ceil.back().x1 > 1e17) S.ceil.back().x1 = x + 30;
         S.lastFlip = t;
         S.flips++;
-        S.used[grounded ? "blue pad (plane switch)" : "blue orb (plane switch)"]++;
+        S.used[spider ? (grounded ? "spider pad (plane snap)" : "spider orb (plane snap)")
+                      : (grounded ? "blue pad (plane switch)" : "blue orb (plane switch)")]++;
         S.flipsAt.push_back({t, np == Ceil});
         return true;
     };
@@ -240,7 +248,7 @@ void Gen::genCube(size_t si) {
 
     // apply one bar's clicks following the plan (deterministic: no randomness inside)
     auto runBar = [&](Sim& S, std::vector<Click> const& cl, BarPlan const& pl) {
-        S.kinds = S.heightChanges = S.flips = S.specials = S.skipped = 0;
+        S.kinds = S.heightChanges = S.flips = S.specials = S.skipped = S.chains = 0;
         S.sync = 0;
         S.sig.clear();
         int kindMask = 0;
@@ -261,7 +269,7 @@ void Gen::genCube(size_t si) {
             if (!S.flying) {
                 double rest = S.plane == Ceil ? 0.3 : 0.06; // time to read the flipped view
                 if (c.t < S.lastLand + rest) { S.skipped++; continue; }
-                if (it == IFlip && allowFlip && flipAt(S, c.t, true)) {
+                if (it == IFlip && allowFlip && flipAt(S, c.t, true, spiderOk && var >= 2)) {
                     kindMask |= 1 << 4;
                     S.sig += 'F';
                     S.sync += 1.5 * c.strength;
@@ -269,7 +277,7 @@ void Gen::genCube(size_t si) {
                 }
                 if (it == IDrop && S.surf > 0) {
                     // walk off the ledge on this note (no click), fall down
-                    closePillar(S, x - 15);
+                    closePillar(S, x - PLAYER_HALF, true);
                     double tgt = std::max(0.0, std::min(target, S.surf - 30));
                     S.flights.push_back({{{c.t, S.surf, 0, c.t + fallTime(S.surf, 0, tgt), false, false, S.plane}},
                                          S.surf, tgt, true, false, ObSpikes});
@@ -282,13 +290,12 @@ void Gen::genCube(size_t si) {
                 }
                 bool pad = it == IPad && D.pads;
                 int padId = obj::PadYellow;
-                double mult = 1.0;
+                double v0 = JUMP;
                 if (pad) {
-                    if (target > S.surf + 75) padId = obj::PadRed, mult = PAD_RED;
-                    else if (target > S.surf) padId = obj::PadYellow, mult = PAD_YELLOW;
-                    else padId = obj::PadPink, mult = PAD_PINK;
+                    if (target > S.surf + 75) padId = obj::PadRed, v0 = PAD_RED * PAD_V;
+                    else if (target > S.surf) padId = obj::PadYellow, v0 = PAD_YELLOW * PAD_V;
+                    else padId = obj::PadPink, v0 = PAD_PINK * PAD_V;
                 }
-                double v0 = CUBE_V * mult;
                 if (target > apexOf(S.surf, v0) - 12) target = S.surf;
                 if (target > apexOf(S.surf, v0) - 12) target = 0;
                 closePillar(S, x + 10);
@@ -321,7 +328,7 @@ void Gen::genCube(size_t si) {
             if ((cur.plane == Ceil || f.flip) && it != IFlip) { S.skipped++; continue; }
             double y = yOf(cur, c.t);
             if (y < 25 || y > 175) { S.skipped++; continue; }
-            if (it == IFlip && allowFlip && cur.plane == S.plane && flipAt(S, c.t, false)) {
+            if (it == IFlip && allowFlip && cur.plane == S.plane && flipAt(S, c.t, false, spiderOk && var >= 2)) {
                 kindMask |= 1 << 4;
                 S.sig += 'f';
                 S.sync += 1.5 * c.strength;
@@ -346,13 +353,32 @@ void Gen::genCube(size_t si) {
                     continue;
                 }
             }
+            bool chained = f.arcs.size() >= 2 && !cur.dash; // the flight already took an orb
+            if (it == IBlack && allowSlam && y >= 45) {
+                // black orb: slam straight down onto the floor / a lower platform
+                double tgt = target <= y - 30 ? target : 0;
+                cur.tEnd = c.t;
+                f.arcs.push_back({c.t, y, -ORB_BLACK, c.t + fallTime(y, -ORB_BLACK, tgt), true, false, cur.plane});
+                if (std::abs(tgt - f.landH) > 1) S.heightChanges++;
+                f.landH = tgt, f.special = true;
+                S.placed.push_back({obj::OrbBlack, c.t, x, y + PLAYER_HALF, cur.plane, true});
+                S.clicks++;
+                S.specials += 2;
+                if (chained) S.chains++;
+                S.used["black orb slam"]++;
+                kindMask |= 1 << 6;
+                S.sig += 'K';
+                S.sync += 1.8 * c.strength; // the slam lands on the hit
+                continue;
+            }
             int id = obj::OrbYellow;
             double mult = ORB_YELLOW;
             if (y > 95) id = obj::OrbPink, mult = ORB_PINK;
             else if (target > y + 30 && dif >= 3) id = obj::OrbRed, mult = ORB_RED;
             else if (var == 3) id = obj::OrbPink, mult = ORB_PINK;
-            double v0 = CUBE_V * mult;
+            double v0 = JUMP * mult;
             if (target > apexOf(y, v0) - 12) target = 0;
+            if (chained) S.chains++, S.used["orb chain"]++;
             cur.tEnd = c.t;
             f.arcs.push_back({c.t, y, v0, c.t + fallTime(y, v0, target), true, false, cur.plane});
             if (std::abs(target - f.landH) > 1) S.heightChanges++;
@@ -378,14 +404,15 @@ void Gen::genCube(size_t si) {
 
     // intent odds follow the part's style genome; at 0.5 every knob gives the base odds
     auto& sg = s.g;
-    double wIn[6] = {0.34, 0.18 * (0.5 + sg.orbs), 0.14 * (0.5 + sg.pads), 0.10 * (0.5 + sg.orbs),
-                     0.12 * (0.5 + sg.platforms), 0.12 * (0.5 + sg.planeFlips)};
+    double wIn[INTENT_COUNT] = {0.34, 0.18 * (0.5 + sg.orbs), 0.14 * (0.5 + sg.pads), 0.10 * (0.5 + sg.orbs),
+                                0.12 * (0.5 + sg.platforms), 0.12 * (0.5 + sg.planeFlips),
+                                allowSlam ? 0.10 * (0.5 + sg.slams) : 0.0};
     double wSum = 0;
     for (double w : wIn) wSum += w;
     auto randomIntent = [&]() {
         double r = rnd() * wSum;
-        static constexpr Intent order[6] = {IJump, IOrb, IPad, IDash, IDrop, IFlip};
-        for (int k = 0; k < 6; k++) {
+        static constexpr Intent order[INTENT_COUNT] = {IJump, IOrb, IPad, IDash, IDrop, IFlip, IBlack};
+        for (int k = 0; k < INTENT_COUNT; k++) {
             if (r < wIn[k]) return order[k];
             r -= wIn[k];
         }
@@ -422,7 +449,7 @@ void Gen::genCube(size_t si) {
             T = S;
             runBar(T, cl, pl);
             double score = 0;
-            score += fancy * (3.0 * T.kinds + 2.0 * T.heightChanges + 5.0 * T.flips + 1.5 * T.specials);
+            score += fancy * (3.0 * T.kinds + 2.0 * T.heightChanges + 5.0 * T.flips + 1.5 * T.specials + 3.0 * T.chains);
             score += 2.0 * T.sync;
             score -= 4.0 * T.skipped;
             for (auto& r : recent) if (r == T.sig) score -= 6; // no copy-paste bars
@@ -476,7 +503,7 @@ void Gen::genCube(size_t si) {
     if (S.plane == Ceil) {
         // safety net: a blue pad right after landing brings the cube back to the floor
         double t = std::min(b, S.lastLand + 0.15);
-        flipAt(S, t, true);
+        flipAt(S, t, true, false);
         if (S.flying) land(S);
     }
     closePillar(S, tl.x(s.t1) - 45);
@@ -489,9 +516,28 @@ void Gen::genCube(size_t si) {
         int n = std::clamp(int(std::round(4 * D.density * LEVEL_DENSITY[3])), 1, 6);
         double combos = 1;
         for (int i = 0; i < n; i++) combos = combos * (usableSlots - i) / (i + 1);
-        double perClick = 6.0 /*intents*/ * (maxH + 1) /*heights*/ * 3 /*orb/pad variants*/ * (dif >= 2 ? 4 : 2);
+        double perClick = double(INTENT_COUNT) /*intents*/ * (maxH + 1) /*heights*/ * 3 /*orb/pad variants*/ * (dif >= 2 ? 4 : 2);
         double space = std::log10(std::max(1.0, combos)) + n * std::log10(perClick) + std::log10(5.0 * int(CONTOUR_COUNT));
         patternSpace = std::max(patternSpace, space);
+    }
+
+    // ---- the intended path, for the tests ------------------------------------------------
+    {
+        size_t fi = 0;
+        double surf = 0;
+        Plane pl = Floor;
+        for (double t = s.t0 + 0.5; t < s.t1 - 0.3; t += 1.0 / 120) {
+            while (fi < S.flights.size() && S.flights[fi].arcs.back().tEnd < t) {
+                surf = S.flights[fi].landH, pl = S.flights[fi].arcs.back().plane;
+                fi++;
+            }
+            double yl = surf;
+            Plane p = pl;
+            if (fi < S.flights.size() && t >= S.flights[fi].arcs.front().t0) {
+                for (auto& r : S.flights[fi].arcs) if (t >= r.t0 && t <= r.tEnd) yl = std::max(0.0, yOf(r, t)), p = r.plane;
+            }
+            trace.push_back({tl.x(t), p == Floor ? yl + 15 : CEIL_Y - yl - 15, PLAYER_HALF});
+        }
     }
 
     // ---- emit objects -----------------------------------------------------------------
@@ -514,15 +560,28 @@ void Gen::genCube(size_t si) {
         used("ceiling plane");
     }
     for (auto& p : S.placed) {
-        bool isPad = p.id == obj::PadYellow || p.id == obj::PadPink || p.id == obj::PadRed || p.id == PadBlue;
+        bool isPad = p.id == obj::PadYellow || p.id == obj::PadPink || p.id == obj::PadRed || p.id == obj::PadBlue ||
+                     p.id == obj::PadSpider;
         double wy = p.plane == Floor ? p.localY : (isPad ? CEIL_Y - p.localY : CEIL_Y - 30 - (p.localY - PLAYER_HALF) + PLAYER_HALF);
         if (p.plane == Ceil && !isPad) wy = CEIL_Y - p.localY; // orb centre = player centre
         auto& o = out.add(p.id, p.x, wy);
         if (p.plane == Ceil && isPad) o.kv(key::Rotation, 180);
         o.group(chunkGroup(si, p.t, p.x, p.upper));
     }
+    // a pillar the cube walks off must end exactly at the drop edge (GD keeps the cube up while
+    // any part of its box is over a block): its block grid is shifted to end there
+    auto pillarSpan = [&](Pillar const& p) {
+        double n = std::ceil((p.x1 - p.x0) / 30.0), x0 = p.x0;
+        if (p.drop) {
+            double d = std::fmod(p.x1 - p.x0, 30.0);
+            if (d <= 8 && p.x1 - p.x0 >= 30) n = std::floor((p.x1 - p.x0) / 30.0);
+            x0 = p.x1 - 30 * n;
+        }
+        return std::pair<double, double>{x0, x0 + 30 * n};
+    };
     for (auto& p : S.pillars) {
-        for (double c = p.x0 + 15; c - 15 < p.x1; c += 30) {
+        auto [px0, px1] = pillarSpan(p);
+        for (double c = px0 + 15; c < px1; c += 30) {
             for (double y = 15; y < p.h; y += 30) {
                 solidBlock(c, worldY(y, p.plane), chunkGroup(si, p.t, c, p.plane == Ceil), si);
             }
@@ -532,8 +591,8 @@ void Gen::genCube(size_t si) {
     auto inPillar = [&](double sx, Plane pl) {
         for (auto& p : S.pillars) {
             if (p.plane != pl) continue;
-            double right = p.x0 + 30 * std::ceil((p.x1 - p.x0) / 30.0);
-            if (sx + 15 > p.x0 - 2 && sx - 15 < right + 2) return true;
+            auto [left, right] = pillarSpan(p);
+            if (sx + 15 > left - 2 && sx - 15 < right + 2) return true;
         }
         return false;
     };

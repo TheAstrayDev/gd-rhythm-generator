@@ -21,7 +21,8 @@ void Gen::planSegments() {
     // split long sections into 8-bar pieces (16 for calm ones) so modes change regularly,
     // the way creators switch gamemodes on phrase boundaries
     std::vector<Seg> raw;
-    for (auto& s : secs) {
+    for (size_t sec = 0; sec < secs.size(); sec++) {
+        auto& s = secs[sec];
         // calm parts are long; intense parts switch every 4 bars (sometimes 2) for surprise
         // how often the gamemode switches is a style trait (switch-ups vs long flowing parts)
         double sw = G.switchRate;
@@ -33,6 +34,7 @@ void Gen::planSegments() {
         double len = (s.end - s.start) / pieces;
         for (int k = 0; k < pieces; k++) {
             Seg g{s.start + k * len, s.start + (k + 1) * len, Mode::Cube, 1, s.level, k == 0 && s.drop};
+            g.section = int(sec);
             raw.push_back(g);
         }
     }
@@ -45,38 +47,50 @@ void Gen::planSegments() {
         segs.push_back(s);
     }
 
-    // choose modes: calm parts favour cube/ship, drops favour wave/spider/fast cube
+    // design: one block theme per song section - the calm sections share one, the intense ones
+    // another - and one glow decision for the whole level
+    int themeCalm = pickTileset(G, rng), themeHot = rnd() < 0.6 ? pickTileset(G, rng) : themeCalm;
+    glowOn = G.glow > 0.2;
+
+    // choose modes: calm parts favour cube/ship/ufo, drops favour wave/spider/swing/fast cube
     Mode prev = Mode::Cube, prev2 = Mode::Cube;
     for (size_t i = 0; i < segs.size(); i++) {
         auto& s = segs[i];
-        // every part gets its own variation of the level's style and two block tilesets
+        // every part gets its own variation of the level's style
         s.g = varyGenome(G, rng, 0.12);
-        s.tileset = pickTileset(s.g, rng);
-        s.tilesetAlt = pickTileset(s.g, rng);
+        s.tileset = s.level >= 2 ? themeHot : themeCalm;
+        double fl = 0.5 + s.g.flyers;
         std::vector<std::pair<Mode, double>> opts;
         auto addOpt = [&](Mode m, double w) {
             if (i > 0 && m == prev) return;
             if (i > 1 && m == prev2) w *= 0.6; // avoid A-B-A ping-pong
             opts.push_back({m, w});
         };
+        bool swingOk = diff() >= 2;
         switch (s.level) {
-            case 0: addOpt(Mode::Cube, 2.0); addOpt(Mode::Ship, 1.2); if (diff() >= 1) addOpt(Mode::Ball, 0.5); break;
+            case 0:
+                addOpt(Mode::Cube, 2.0); addOpt(Mode::Ship, 1.2); addOpt(Mode::Ufo, 0.8 * fl);
+                if (diff() >= 1) addOpt(Mode::Ball, 0.5);
+                break;
             case 1:
-                addOpt(Mode::Cube, 2.0); addOpt(Mode::Ball, 1.0); addOpt(Mode::Ship, 1.0);
+                addOpt(Mode::Cube, 2.0); addOpt(Mode::Ball, 1.0); addOpt(Mode::Ship, 1.0); addOpt(Mode::Ufo, 0.8 * fl);
                 if (D.spider) addOpt(Mode::Spider, 0.8);
                 if (diff() >= 1) addOpt(Mode::Robot, 1.6 * s.g.robot);
+                if (swingOk) addOpt(Mode::Swing, 0.6 * fl);
                 break;
             case 2:
-                addOpt(Mode::Cube, 1.8); addOpt(Mode::Ball, 1.0); addOpt(Mode::Ship, 0.9);
+                addOpt(Mode::Cube, 1.8); addOpt(Mode::Ball, 0.8); addOpt(Mode::Ship, 0.9); addOpt(Mode::Ufo, 0.6 * fl);
                 if (D.spider) addOpt(Mode::Spider, 1.0);
                 if (D.wave) addOpt(Mode::Wave, 1.0);
                 if (diff() >= 1) addOpt(Mode::Robot, 1.4 * s.g.robot);
+                if (swingOk) addOpt(Mode::Swing, 0.9 * fl);
                 break;
             default:
                 addOpt(Mode::Cube, 1.5); addOpt(Mode::Ship, 0.7);
                 if (D.wave) addOpt(Mode::Wave, s.drop ? 2.5 : 1.5);
                 if (D.spider) addOpt(Mode::Spider, 1.2);
-                if (!D.wave && !D.spider) addOpt(Mode::Ball, 1.0);
+                if (swingOk) addOpt(Mode::Swing, 1.0 * fl);
+                if (!D.wave && !D.spider) addOpt(Mode::Ball, 1.0), addOpt(Mode::Ufo, 0.8 * fl);
                 break;
         }
         if (i == 0) s.mode = Mode::Cube; // the level starts as a cube
@@ -99,8 +113,7 @@ void Gen::planSegments() {
             if (s.level >= 3 && rnd() < 0.3 + 0.7 * sv) rank = base + 1;
             else if (s.level == 0 && segs[i - 1].level >= 2 && diff() >= 2 && rnd() < sv) rank = base - 1;
         }
-        bool flyingMode = s.mode == Mode::Ship || s.mode == Mode::Wave;
-        rank = std::clamp(rank, 0, flyingMode ? 3 : 4);
+        rank = std::clamp(rank, 0, flyingMode(s.mode) ? 3 : 4);
         s.speedRank = rank;
 
         // modifiers
@@ -116,6 +129,12 @@ void Gen::planSegments() {
             s.corridor = heights[rndInt(3)];
             if (s.mode == Mode::Ball && s.corridor < 120) s.corridor = 120;
         }
+        // dual portals in intense parts: a mirrored dual wave, or a floor + ceiling dual cube
+        if (i > 0 && s.level >= 2 && s.t1 - s.t0 >= 12 * P) {
+            double pd = 0.1 + 0.5 * s.g.dual;
+            if (s.mode == Mode::Wave && diff() >= 3 && rnd() < pd) s.dual = true, s.mini = false, s.gravity = false;
+            if (s.mode == Mode::Cube && diff() >= 2 && s.t1 - s.t0 <= 44 * P && rnd() < 0.7 * pd) s.dual = true;
+        }
         prev2 = prev;
         prev = s.mode;
         modeCount[int(s.mode)]++;
@@ -125,8 +144,8 @@ void Gen::planSegments() {
         for (size_t i = 1; i < segs.size(); i++) {
             auto& s = segs[i];
             if (s.level < 3 || s.t1 - s.t0 < 15 * P || rnd() > 0.1 + 0.4 * G.speedVariety) continue;
-            int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
-            if (s.speedRank >= cap) continue;
+            int cap = flyingMode(s.mode) ? 3 : 4;
+            if (s.speedRank >= cap || s.dual) continue;
             double mid = (s.t0 + s.t1) / 2, split = -1;
             for (size_t k = 0; k < beats.size(); k++) {
                 if (down[k] && (split < 0 || std::abs(beats[k] - mid) < std::abs(split - mid))) split = beats[k];
@@ -149,8 +168,7 @@ void Gen::planSegments() {
     for (size_t i = 1; i + 1 < segs.size(); i++) {
         auto& s = segs[i];
         if (s.t1 - s.t0 < 16 * P && segs[i - 1].speedRank == segs[i + 1].speedRank && s.speedRank != segs[i - 1].speedRank) {
-            int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
-            s.speedRank = std::min(segs[i - 1].speedRank, cap);
+            s.speedRank = std::min(segs[i - 1].speedRank, flyingMode(s.mode) ? 3 : 4);
         }
     }
     for (size_t i = 0; i + 1 < segs.size(); i++) {
@@ -274,7 +292,9 @@ void Gen::portal(size_t i) {
         case Mode::Ball: id = obj::PortalBall; break;
         case Mode::Wave: id = obj::PortalWave; break;
         case Mode::Spider: id = obj::PortalSpider; break;
-        case Mode::Robot: id = 745; break;
+        case Mode::Robot: id = obj::PortalRobot; break;
+        case Mode::Ufo: id = obj::PortalUfo; break;
+        case Mode::Swing: id = obj::PortalSwing; break;
     }
     out.add(id, x + 15, 45);
 }
@@ -284,23 +304,32 @@ void Gen::portal(size_t i) {
 // current speed again every 4 bars as a safety net (a portal of the current speed does
 // nothing, but if one was missed the next one corrects it).
 void Gen::speedPortals() {
-    double P = beatLen();
     auto column = [&](int rank, double x) {
         for (double y : {15.0, 75.0, 135.0, 195.0}) out.add(SPEED_PORTAL[rank], x, y);
     };
     column(segs[0].speedRank, 0);
-    std::vector<double> changes;
     for (size_t i = 1; i < segs.size(); i++) {
         if (segs[i].speedRank == segs[i - 1].speedRank) continue;
         column(segs[i].speedRank, tl.x(segs[i].t0));
-        changes.push_back(segs[i].t0);
         used(segs[i].speedRank > segs[i - 1].speedRank ? "speed up" : "speed down");
     }
-    for (size_t i = 0; i < segs.size(); i++) {
-        for (double t = segs[i].t0 + 8 * P; t < segs[i].t1 - 2 * P; t += 16 * P) {
+    for (size_t i = 0; i < segs.size(); i++)
+        for (double t : speedNet) if (t >= segs[i].t0 && t < segs[i].t1) column(segs[i].speedRank, tl.x(t));
+}
+
+// The safety-net times, known before anything is generated (both passes agree on them), so
+// teleports and other downbeat objects can keep clear of the columns.
+void Gen::planSpeedNet() {
+    double P = beatLen();
+    std::vector<double> changes;
+    for (size_t i = 1; i < segs.size(); i++)
+        if (segs[i].speedRank != segs[i - 1].speedRank) changes.push_back(segs[i].t0);
+    speedNet.clear();
+    for (auto& sg : segs) {
+        for (double t = sg.t0 + 8 * P; t < sg.t1 - 2 * P; t += 16 * P) {
             bool nearChange = false;
             for (double c : changes) if (std::abs(c - t) < 2 * P) nearChange = true;
-            if (!nearChange) column(segs[i].speedRank, tl.x(t));
+            if (!nearChange) speedNet.push_back(t);
         }
     }
 }
@@ -336,6 +365,8 @@ GenResult Gen::run() {
     }
     planSegments();
     buildTimeline();
+    planSpeedNet();
+    glowGroup = nextGroup++;
     res.duration = segs.back().t1;
 
     if (O.speedPortalsOnly) {
@@ -359,12 +390,14 @@ GenResult Gen::run() {
     for (size_t i = 0; i < segs.size(); i++) {
         portal(i);
         switch (segs[i].mode) {
-            case Mode::Cube: genCube(i); break;
+            case Mode::Cube: segs[i].dual ? genDualCube(i) : genCube(i); break;
             case Mode::Ship: genShip(i); break;
             case Mode::Ball: genFlip(i, false); break;
             case Mode::Spider: genFlip(i, true); break;
             case Mode::Robot: genRobot(i); break;
             case Mode::Wave: genWave(i); break;
+            case Mode::Ufo: genFlyer(i, false); break;
+            case Mode::Swing: genFlyer(i, true); break;
         }
         portalEnd(i);
     }
@@ -380,16 +413,20 @@ GenResult Gen::run() {
         if (!feat.empty()) feat += ", ";
         feat += name + " x" + std::to_string(n);
     }
-    char buf[900];
+    int duals = 0;
+    for (auto& sg : segs) duals += sg.dual;
+    char buf[1000];
     std::snprintf(
         buf, sizeof(buf),
-        "%s | %s | style %s | %zu parts (cube %d, ship %d, ball %d, wave %d, spider %d, robot %d) | ~%d clicks | "
-        "%d objects | cube pattern space ~1e%.0f per bar",
+        "%s | %s | style %s | %zu parts (cube %d, ship %d, ball %d, wave %d, spider %d, robot %d, ufo %d, swing %d; "
+        "dual %d) | ~%d clicks | %d objects | cube pattern space ~1e%.0f per bar",
         A.summary().c_str(), difficultyName(O.difficulty), styleDesc.c_str(), segs.size(), modeCount[0], modeCount[1],
-        modeCount[2], modeCount[3], modeCount[4], modeCount[5], clicks, out.count, patternSpace
+        modeCount[2], modeCount[3], modeCount[4], modeCount[5], modeCount[6], modeCount[7], duals, clicks, out.count,
+        patternSpace
     );
     res.summary = buf;
     res.features = feat;
+    res.trace = std::move(trace);
     return res;
 }
 
