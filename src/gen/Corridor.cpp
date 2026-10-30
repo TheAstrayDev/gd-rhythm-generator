@@ -24,7 +24,6 @@ void Gen::walls2(size_t si, std::vector<double> const& ts, std::vector<double> c
         return vals[i - 1] + (vals[i] - vals[i - 1]) * f;
     };
     WallGroups wg{nextGroup++, nextGroup++, si};
-    walls.push_back(wg);
     for (double xc = xStart; xc <= xEnd; xc += 30) {
         double lo = 1e9, hi = -1e9, gap = 1e9;
         for (double px = xc - 15 - 6; px <= xc + 15 + 6; px += 3) {
@@ -37,12 +36,17 @@ void Gen::walls2(size_t si, std::vector<double> const& ts, std::vector<double> c
         if (bottomOfTop < 330) {
             double h = 360 - bottomOfTop;
             out.add(obj::Block, xc, bottomOfTop + h / 2).kv(key::ScaleY, h / 30).group(wg.top);
+            wg.topEnd = xc;
         }
         double topOfBottom = std::floor((lo - gap / 2) / 7.5) * 7.5;
         if (topOfBottom >= 22.5) {
             out.add(obj::Block, xc, topOfBottom / 2).kv(key::ScaleY, topOfBottom / 30).group(wg.bottom);
+            wg.bottomEnd = xc;
         }
+        wallFaces.push_back({xc, topOfBottom >= 22.5 ? topOfBottom : 0, bottomOfTop < 330 ? bottomOfTop : 360, si,
+                             wg.top, wg.bottom});
     }
+    walls.push_back(wg);
 }
 
 } // namespace rg::gen

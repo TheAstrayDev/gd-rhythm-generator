@@ -40,7 +40,14 @@ struct Analysis {
     std::vector<float> beatSnare;     // 0..1 mid-band hit on each beat
     std::vector<float> beatHat;       // 0..1 high-band hit on each beat
 
-    std::vector<Onset> onsets;
+    std::vector<Onset> onsets;        // percussive onsets (drums): the beat pool
+
+    // vocal / melody pool (harmonic part in the voice band), kept apart from the beat
+    struct Phrase { double start, end; };
+    std::vector<Onset> vocalOnsets;   // syllables / melody note starts (sustain = held length)
+    std::vector<float> beatVocal;     // 0..1 voice / melody presence on each beat
+    std::vector<Phrase> vocalPhrases; // runs of beats with clear voice / melody
+    Onset const* vocalNear(double t, double window = 0.06) const;
     std::vector<Section> sections;
 
     // Onset strength (0..1) at an arbitrary time, max within +-window seconds.

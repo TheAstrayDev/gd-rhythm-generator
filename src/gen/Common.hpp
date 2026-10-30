@@ -5,6 +5,7 @@
 // mappings (github.com/LXtreme/gmdbuilder, src/gmdbuilder/mappings) and GD docs.
 
 #include "../Generator.hpp"
+#include "Style.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -206,6 +207,8 @@ struct Seg {
     bool build = false;    // energy rises into the next part
     int style = 0;         // per-part effect style (palette / shader set)
     double corridor = 120; // ball / spider ceiling height
+    Genome g;              // this part's variation of the level style
+    int tileset = 0, tilesetAlt = 0; // block design (two sets blended per part)
 };
 
 struct Cand {
@@ -220,7 +223,7 @@ struct Chunk {
     int dir; // +1: comes from above, -1: comes from below
 };
 
-struct WallGroups { int top, bottom; size_t seg; };
+struct WallGroups { int top, bottom; size_t seg; double topEnd = -1e18, bottomEnd = -1e18; }; // last column of each wall
 
 class Gen {
 public:
@@ -242,7 +245,25 @@ public:
     int nextGroup = 1;
     std::map<long, Chunk> chunks;
     std::vector<WallGroups> walls;
-    int modeCount[5] = {0, 0, 0, 0, 0};
+    int modeCount[6] = {0, 0, 0, 0, 0, 0};
+    Genome G;                  // the level's style genome (a new blend every generation)
+    std::string styleDesc;
+    // design layer: every solid block cell the gameplay placed, and corridor wall faces
+    struct Cell { double x, y; int group; size_t seg; };
+    std::map<std::pair<long, long>, Cell> cells;
+    struct WallFace { double x, bottomTop, topBottom; size_t seg; int groupTop, groupBottom; };
+    std::vector<WallFace> wallFaces;
+    int glowGroup = 0; // every edge glow (lights up with the vocal pool)
+    std::map<long, std::vector<std::pair<double, double>>> hazards; // spikes by x / 30
+    bool nearHazard(double x, double y, double r = 30) const {
+        for (long k = std::lround(x / 30) - 1; k <= std::lround(x / 30) + 1; k++) {
+            auto it = hazards.find(k);
+            if (it == hazards.end()) continue;
+            for (auto& [hx, hy] : it->second)
+                if (std::abs(hx - x) < r && std::abs(hy - y) < r) return true;
+        }
+        return false;
+    }
     int clicks = 0;
     std::map<std::string, int> features; // what the generator used (for the summary)
     double patternSpace = 0;             // log10 of the per-bar combination count
@@ -266,6 +287,9 @@ public:
     int chunkGroup(size_t segIdx, double t, double x, bool upper);
     void spike(double x, double y, bool down, int group);
     void portal(size_t i);
+    void solidBlock(double x, double y, int group, size_t seg);
+    void design();
+    void genRobot(size_t i);
     void speedPortals();
     void portalEnd(size_t i);
     // music helpers

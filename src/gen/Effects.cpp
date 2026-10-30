@@ -21,6 +21,13 @@
 //            micro zoom punches
 //   calm   : lens circle breathing on downbeats
 //   hits   : white background flash on kicks, line flash on snares
+//   flip   : the screen turns upside down (camera 180) for a few bars of an intense part,
+//            only on a calm downbeat, always back before the part ends
+//   voice  : from the vocal pool, never the beat: edge glow lights up on every sung note and
+//            fades over the held length; the camera leans in while a phrase is sung
+//
+// How much of each a part gets comes from its style genome (fx, camera, flashes,
+// screenFlip, entrances), so two styles never dress the same song the same way.
 // ---------------------------------------------------------------------------------------
 
 namespace rg::gen {
@@ -103,6 +110,7 @@ void Gen::effects() {
     }
 
     int transitionKind = 0;
+    size_t screenFlips = 0;
     for (size_t i = 0; i < segs.size(); i++) {
         auto& s = segs[i];
         double x0 = tl.x(s.t0);
@@ -115,7 +123,7 @@ void Gen::effects() {
         // ---- transition burst at the start of a part (gameplay starts a moment later)
         if (i > 0 && s.mode != segs[i - 1].mode) {
             double f = allow(s.t0, 0.3);
-            if (f > 0) {
+            if (f > 0 && rnd() < 0.35 + 0.65 * s.g.fx) {
                 switch (transitionKind++ % 3) {
                     case 0:
                         shaderPulse(obj::ShaderPixelate, x0, laneY + 270, v * 0.05, 0.3,
@@ -142,7 +150,7 @@ void Gen::effects() {
             out.add(obj::TrigShake, x0, laneY + 150).kv(key::ShakeStrength, 1 + dif / 2)
                 .kv(key::ShakeInterval, 0.02).kv(key::Duration, 0.35);
             double f = allow(s.t0, 0.5);
-            if (f > 0) {
+            if (f > 0 && (i == biggest || rnd() < 0.4 + 0.6 * s.g.fx)) {
                 if (i % 2 == 0) {
                     out.add(obj::ShaderShockwave, x0, laneY + 300).kv(key::PlayerCenter, 1).kv(key::Duration, 0.6)
                         .kv(key::ShSpeed, 1.4).kv(key::ShStrength, 2 * f).kv(key::ShWidth, 30).kv(key::ShThickness, 12);
@@ -191,14 +199,18 @@ void Gen::effects() {
             double bz = busy(t, 0.3);
             if (isDown) bar++;
             // white flashes (shorter when the player is busy)
-            if ((lv >= 1 && (kick > 0.45f || isDown)) || (lv == 0 && isDown)) {
+            double fl = s.g.flashes;
+            bool kickFlash = fl >= 0.3 ? (lv >= 1 && (kick > 0.45f || isDown)) || (lv == 0 && isDown)
+                                       : fl >= 0.1 && isDown && lv >= 1;
+            if (kickFlash) {
                 pulse(px, laneY + 30, ch::BG, 0, 0, P * (isDown ? 0.35 : 0.2) * (bz > 0.7 ? 0.5 : 1.0));
                 used("kick flash");
             }
-            if (lv >= 1 && snare > 0.5f && !isDown) pulse(px, laneY + 60, ch::Line, 0, 0, P * 0.5);
+            if (lv >= 1 && fl >= 0.4 && snare > 0.5f && !isDown) pulse(px, laneY + 60, ch::Line, 0, 0, P * 0.5);
 
-            if (lv >= 3) {
-                if (snare > 0.5f && !isDown && dif >= 2) {
+            // effect-heavy styles bring the peak shaders into high parts too
+            if (lv >= 3 || (lv == 2 && s.g.fx > 0.75)) {
+                if (snare > 0.5f && !isDown && dif >= 2 && s.g.fx >= 0.3) {
                     double f = allow(t, 0.2);
                     if (f > 0) {
                         shaderPulse(obj::ShaderChromatic, px, laneY + 480, v * 0.04, P * 0.4,
@@ -208,7 +220,7 @@ void Gen::effects() {
                     }
                 }
                 if (isDown && dif >= 3) {
-                    if (allow(t, 0.4) >= 1) {
+                    if (allow(t, 0.4) >= 1 && s.g.fx >= 0.45) {
                         if (bar % 2) {
                             shaderPulse(obj::ShaderBulge, px, laneY + 510, v * 0.03, P * 0.5,
                                         {{key::PlayerCenter, 1}, {key::ShStrength, 0.25}, {key::ShThickness, 300}}, {{key::ShStrength, 0}});
@@ -235,13 +247,40 @@ void Gen::effects() {
             }
         }
 
+        // ---- screen flip: the camera turns upside down on a calm downbeat of an intense part
+        // and back a few bars later (never across the part's end)
+        bool flipped = false;
+        if (dif >= 2 && lv >= 2 && s.t1 - s.t0 > 16 * P && screenFlips < std::max<size_t>(1, segs.size() / 4) &&
+            rnd() < 0.9 * s.g.screenFlip) {
+            double tOn = -1, tOff = -1;
+            for (size_t k = 0; k < beats.size() && tOn < 0; k++)
+                if (down[k] && beats[k] >= s.t0 + 4 * P && beats[k] < s.t1 - 12 * P && busy(beats[k], P) < 0.5) tOn = beats[k];
+            if (tOn > 0) {
+                double hold = (rnd() < 0.5 ? 8 : 16) * P;
+                for (size_t k = 0; k < beats.size() && tOff < 0; k++)
+                    if (down[k] && beats[k] >= tOn + hold && beats[k] < s.t1 - P && busy(beats[k], P) < 0.6) tOff = beats[k];
+                if (tOff < 0) tOff = s.t1 - 2 * P;
+                double turn = std::min(P * 0.75, 0.4);
+                out.add(obj::TrigCamRotate, tl.x(tOn), laneY + 180).kv(key::Degrees, 180)
+                    .kv(key::Duration, turn).kv(key::Easing, ease::InOut);
+                out.add(obj::TrigCamRotate, tl.x(tOff), laneY + 180).kv(key::Degrees, 0)
+                    .kv(key::Duration, turn).kv(key::Easing, ease::InOut);
+                pulse(tl.x(tOn), laneY + 30, ch::BG, 0, 0, P * 0.5);
+                pulse(tl.x(tOff), laneY + 30, ch::BG, 0, 0, P * 0.5);
+                flipped = true;
+                screenFlips++;
+                used("screen flip");
+            }
+        }
+
         // ---- peaks: tilt swings, skipped where the player is busy
-        if (lv >= 3 && dif >= 2) {
+        if (lv >= 3 && dif >= 2 && !flipped && s.g.camera >= 0.25) {
             int sign = rnd() < 0.5 ? 1 : -1;
             bool tilted = false;
+            double deg = 1 + 3 * s.g.camera;
             for (double t = s.t0; t < s.t1 - 2 * P; t += 8 * P) {
                 if (busy(t, P) > 0.6) continue;
-                out.add(obj::TrigCamRotate, tl.x(t), laneY + 180).kv(key::Degrees, 2 * sign)
+                out.add(obj::TrigCamRotate, tl.x(t), laneY + 180).kv(key::Degrees, deg * sign)
                     .kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
                 sign = -sign;
                 tilted = true;
@@ -272,7 +311,7 @@ void Gen::effects() {
             double gx = tl.x(gt);
             if (gx <= latest && gx >= earliest) tb = gt;
         }
-        if (tb < 0) continue;
+        if (tb < 0 || rnd() > 0.25 + 0.75 * s.g.entrances) continue;
         double bx = tl.x(tb);
         double dx = 0, dy = 0;
         int easing = ease::BackOut;
@@ -308,14 +347,49 @@ void Gen::effects() {
             if (t < s.t0 + P || t >= s.t1 - 4 * P) continue;
             if (!down[k] && s.level < 3) continue;
             double x = tl.x(t);
-            out.add(obj::TrigMove, x, laneY + 210).kv(key::TargetGroup, w.top).kv(key::MoveY, 8).kv(key::Duration, 0.05);
-            out.add(obj::TrigMove, x + v * 0.06, laneY + 210).kv(key::TargetGroup, w.top).kv(key::MoveY, -8)
-                .kv(key::Duration, P * 0.6).kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
-            out.add(obj::TrigMove, x, laneY + 240).kv(key::TargetGroup, w.bottom).kv(key::MoveY, -8).kv(key::Duration, 0.05);
-            out.add(obj::TrigMove, x + v * 0.06, laneY + 240).kv(key::TargetGroup, w.bottom).kv(key::MoveY, 8)
-                .kv(key::Duration, P * 0.6).kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
+            // only while the wall still has columns ahead (wave walls can end early)
+            if (x + v * 0.06 < w.topEnd - 30) {
+                out.add(obj::TrigMove, x, laneY + 210).kv(key::TargetGroup, w.top).kv(key::MoveY, 8).kv(key::Duration, 0.05);
+                out.add(obj::TrigMove, x + v * 0.06, laneY + 210).kv(key::TargetGroup, w.top).kv(key::MoveY, -8)
+                    .kv(key::Duration, P * 0.6).kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
+            }
+            if (x + v * 0.06 < w.bottomEnd - 30) {
+                out.add(obj::TrigMove, x, laneY + 240).kv(key::TargetGroup, w.bottom).kv(key::MoveY, -8).kv(key::Duration, 0.05);
+                out.add(obj::TrigMove, x + v * 0.06, laneY + 240).kv(key::TargetGroup, w.bottom).kv(key::MoveY, 8)
+                    .kv(key::Duration, P * 0.6).kv(key::Easing, ease::ExpOut).kv(key::EasingRate, 2);
+            }
         }
         used("breathing walls");
+    }
+
+    // ---- vocal pool: the design reacts to the voice, the gameplay stays on the beat ------
+    if (glowGroup > 0) {
+        // edge glow rests dimmed and lights up on every sung note, fading over its length
+        out.add(obj::TrigAlpha, 1, laneY + 660).kv(key::TargetGroup, glowGroup).kv(key::Opacity, 0.45).kv(key::Duration, 0);
+        int lit = 0;
+        double lastT = -1;
+        for (auto& vo : A.vocalOnsets) {
+            double t = lt(vo.time);
+            if (t < 0.5 || t - lastT < 0.12 || vo.strength < 0.4f) continue;
+            auto it = std::find_if(segs.begin(), segs.end(), [&](Seg const& sg) { return t >= sg.t0 && t < sg.t1; });
+            if (it == segs.end() || it->g.glow < 0.3) continue;
+            double x = tl.x(t);
+            out.add(obj::TrigAlpha, x, laneY + 660).kv(key::TargetGroup, glowGroup).kv(key::Opacity, 1).kv(key::Duration, 0.04);
+            out.add(obj::TrigAlpha, x + 0.06 * SPEED_UPS[it->speedRank], laneY + 690).kv(key::TargetGroup, glowGroup)
+                .kv(key::Opacity, 0.45).kv(key::Duration, std::clamp(double(vo.sustain), 0.15, 1.5)).kv(key::Easing, ease::SineOut);
+            lastT = t, lit++;
+        }
+        if (lit) features["glow sings along"] += lit;
+    }
+    for (auto& ph : A.vocalPhrases) {
+        double t0 = lt(ph.start), t1 = lt(ph.end);
+        auto it = std::find_if(segs.begin(), segs.end(), [&](Seg const& sg) { return t0 >= sg.t0 + P && t1 <= sg.t1 - P; });
+        if (it == segs.end() || it->level > 2 || it->build || it->g.camera < 0.3 || t1 - t0 < 4 * P) continue;
+        if (busy(t0, P) > 0.6) continue;
+        double z = it->mode == Mode::Ship || it->mode == Mode::Wave ? 0.92 : 1.0;
+        out.add(obj::TrigZoom, tl.x(t0), laneY + 330).kv(key::Zoom, z * 1.04).kv(key::Duration, 2 * P).kv(key::Easing, ease::SineInOut);
+        out.add(obj::TrigZoom, tl.x(t1), laneY + 330).kv(key::Zoom, z).kv(key::Duration, P).kv(key::Easing, ease::SineInOut);
+        used("camera leans into vocal phrase");
     }
 }
 

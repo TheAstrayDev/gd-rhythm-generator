@@ -15,12 +15,13 @@ enum class Difficulty { Easy = 0, Normal, Hard, Harder, Insane, Demon };
 inline constexpr int DIFFICULTY_COUNT = 6;
 char const* difficultyName(Difficulty d);
 
-enum class Mode { Cube, Ship, Ball, Wave, Spider };
+enum class Mode { Cube, Ship, Ball, Wave, Spider, Robot };
 char const* modeName(Mode m);
 
 struct GenOptions {
     Difficulty difficulty = Difficulty::Hard;
     uint32_t seed = 1;
+    uint32_t styleMask = 0;    // bit per style (Classic, Modern, Neon, Tech, Effects, Hardcore, Chill); 0 = all
     bool effects = true;       // color / pulse / move / alpha / shake / camera triggers
     double syncOffset = 0;     // seconds, added to every musical time (user calibration)
     double songOffset = 0;     // level's song start offset (seconds)
@@ -42,6 +43,7 @@ struct GenResult {
     std::string features;   // which gameplay / effect techniques were used, with counts
     std::vector<double> modelX; // pass 1: the generator's own x at t = i * timelineStep
     double duration = 0;        // level time covered (seconds)
+    std::string style;          // the style mix this level was generated with
 };
 
 GenResult generate(Analysis const& a, GenOptions const& opt);

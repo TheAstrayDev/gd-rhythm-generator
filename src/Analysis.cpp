@@ -91,13 +91,23 @@ Onset const* Analysis::onsetNear(double t, double window) const {
     return best;
 }
 
+Onset const* Analysis::vocalNear(double t, double window) const {
+    auto it = std::lower_bound(vocalOnsets.begin(), vocalOnsets.end(), t - window,
+                               [](Onset const& o, double v) { return o.time < v; });
+    Onset const* best = nullptr;
+    for (; it != vocalOnsets.end() && it->time <= t + window; ++it) {
+        if (!best || it->strength > best->strength) best = &*it;
+    }
+    return best;
+}
+
 std::string Analysis::summary() const {
     int counts[4] = {0, 0, 0, 0};
     for (auto& s : sections) counts[std::clamp(s.level, 0, 3)]++;
     char buf[256];
     std::snprintf(
-        buf, sizeof(buf), "%.1f BPM%s, %zu beats, %zu onsets, sections: %d calm / %d mid / %d high / %d peak",
-        bpm, constantTempo ? "" : " (variable)", beats.size(), onsets.size(),
+        buf, sizeof(buf), "%.1f BPM%s, %zu beats, %zu drum onsets, vocal pool %zu notes / %zu phrases, sections: %d calm / %d mid / %d high / %d peak",
+        bpm, constantTempo ? "" : " (variable)", beats.size(), onsets.size(), vocalOnsets.size(), vocalPhrases.size(),
         counts[0], counts[1], counts[2], counts[3]
     );
     return buf;
@@ -133,10 +143,16 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
     int lowEnd = std::max(2, int(200.0 / binHz));
     int midEnd = int(2500.0 / binHz);
 
+    // ---- 2. STFT magnitudes, then harmonic / percussive separation ---------------------
+    // Drums are short in time and wide in frequency; sung or held notes are long in time and
+    // narrow in frequency. A median across time keeps the harmonic part, a median across
+    // frequency keeps the percussive part (Fitzgerald HPSS). Beats and gameplay onsets come
+    // from the percussive part only, so vocals can't pull the beat grid; the harmonic part in
+    // the voice band becomes a separate vocal / melody pool.
     std::vector<float> flux(frames, 0), fluxLow(frames, 0), fluxMid(frames, 0), fluxHigh(frames, 0), rms(frames, 0);
-    std::vector<float> prev(size_t(bins), 0), cur(size_t(bins), 0);
+    std::vector<float> vocalFlux(frames, 0), vocalEnergy(frames, 0);
+    std::vector<float> mag(frames * size_t(bins), 0);
     std::vector<std::complex<float>> buf(FRAME);
-
     for (size_t f = 0; f < frames; f++) {
         size_t off = f * HOP;
         double e = 0;
@@ -147,24 +163,62 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
         }
         rms[f] = float(std::sqrt(e / FRAME));
         fft(buf);
-        float fl = 0, fLow = 0, fMid = 0, fHigh = 0;
+        for (int k = 1; k < bins; k++) mag[f * size_t(bins) + size_t(k)] = std::abs(buf[size_t(k)]) * (2.f / FRAME);
+    }
+    constexpr int RT = 8, RF = 8; // median half-widths: ~0.19 s in time, ~170 Hz in frequency
+    std::vector<float> harm(frames * size_t(bins), 0);
+    {
+        std::vector<float> w;
         for (int k = 1; k < bins; k++) {
-            float mag = std::abs(buf[size_t(k)]) * (2.f / FRAME);
-            cur[size_t(k)] = std::log1p(1000.f * mag);
-            float d = cur[size_t(k)] - prev[size_t(k)];
-            if (d > 0) {
-                fl += d;
-                if (k < lowEnd) fLow += d;
-                else if (k >= midEnd) fHigh += d;
-                else fMid += d;
+            for (size_t f = 0; f < frames; f++) {
+                w.clear();
+                size_t a = f >= size_t(RT) ? f - RT : 0, b = std::min(frames - 1, f + RT);
+                for (size_t g = a; g <= b; g++) w.push_back(mag[g * size_t(bins) + size_t(k)]);
+                std::nth_element(w.begin(), w.begin() + long(w.size() / 2), w.end());
+                harm[f * size_t(bins) + size_t(k)] = w[w.size() / 2];
             }
         }
-        flux[f] = fl;
-        fluxLow[f] = fLow;
-        fluxHigh[f] = fHigh;
-        fluxMid[f] = fMid;
-        std::swap(prev, cur);
     }
+    int voiceLo = int(250.0 / binHz), voiceHi = int(3500.0 / binHz);
+    {
+        std::vector<float> prevP(size_t(bins), 0), curP(size_t(bins), 0), prevH(size_t(bins), 0), curH(size_t(bins), 0);
+        std::vector<float> w;
+        for (size_t f = 0; f < frames; f++) {
+            float const* m = &mag[f * size_t(bins)];
+            float const* h = &harm[f * size_t(bins)];
+            float fl = 0, fLow = 0, fMid = 0, fHigh = 0, vf = 0;
+            double ve = 0;
+            for (int k = 1; k < bins; k++) {
+                w.clear();
+                for (int j = std::max(1, k - RF); j <= std::min(bins - 1, k + RF); j++) w.push_back(m[j]);
+                std::nth_element(w.begin(), w.begin() + long(w.size() / 2), w.end());
+                float p = w[w.size() / 2], hh = h[k];
+                float mp = p * p / (p * p + hh * hh + 1e-12f);
+                curP[size_t(k)] = std::log1p(1000.f * m[k] * mp);
+                curH[size_t(k)] = std::log1p(1000.f * m[k] * (1 - mp));
+                float d = curP[size_t(k)] - prevP[size_t(k)];
+                if (d > 0) {
+                    fl += d;
+                    if (k < lowEnd) fLow += d;
+                    else if (k >= midEnd) fHigh += d;
+                    else fMid += d;
+                }
+                if (k >= voiceLo && k <= voiceHi) {
+                    float dh = curH[size_t(k)] - prevH[size_t(k)];
+                    if (dh > 0) vf += dh;
+                    double hm = m[k] * (1 - mp);
+                    ve += hm * hm;
+                }
+            }
+            flux[f] = fl, fluxLow[f] = fLow, fluxMid[f] = fMid, fluxHigh[f] = fHigh;
+            vocalFlux[f] = vf;
+            vocalEnergy[f] = float(std::sqrt(ve));
+            std::swap(prevP, curP);
+            std::swap(prevH, curH);
+        }
+    }
+    std::vector<float>().swap(harm);
+    std::vector<float>().swap(mag);
 
     // ---- 3. onset envelope: remove local mean, normalize -----------------------------
     auto onsetEnvelope = [&](std::vector<float> const& src) {
@@ -191,10 +245,8 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
     // Beats are tracked on a kick-weighted envelope: in GD-style music (EDM) the kick sits on
     // the beat while broadband hats/claps often sit on the offbeat.
     std::vector<float> beatEnv(frames);
-    {
-        auto lowEnv = onsetEnvelope(fluxLow);
-        for (size_t i = 0; i < frames; i++) beatEnv[i] = 0.35f * odf[i] + lowEnv[i];
-    }
+    auto lowEnv = onsetEnvelope(fluxLow);
+    for (size_t i = 0; i < frames; i++) beatEnv[i] = 0.35f * odf[i] + lowEnv[i];
 
     // ---- 4. tempo: weighted autocorrelation ------------------------------------------
     double period; // in frames
@@ -247,6 +299,19 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
         double bpm = 60.0 * fps / period;
         while (bpm < 70) bpm *= 2;
         while (bpm > 230) bpm /= 2;
+        // octave check on the kick alone: if kicks line up far better with half the tempo,
+        // the fast candidate was counting hi-hats on the off-beats
+        if (bpm > 140) {
+            auto acLow = [&](double lag) {
+                double s = 0;
+                size_t L = size_t(std::lround(lag));
+                if (L == 0 || L >= frames) return 0.0;
+                for (size_t i = 0; i + L < frames; i++) s += double(lowEnv[i]) * lowEnv[i + L];
+                return s / double(frames - L);
+            };
+            double lag = 60.0 * fps / bpm;
+            if (acLow(2 * lag) > 1.6 * acLow(lag) + 1e-9) bpm /= 2;
+        }
         period = 60.0 * fps / bpm;
     }
 
@@ -358,7 +423,7 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
     res.beatKick.resize(nb);
     res.beatSnare.resize(nb);
     res.beatHat.resize(nb);
-    std::vector<float> beatLow(nb), beatHigh(nb);
+    std::vector<float> beatLow(nb), beatHigh(nb), beatLowE(nb);
     for (size_t i = 0; i < nb; i++) {
         res.beatStrength[i] = res.onsetAt(beats[i], 0.035);
         long f = frameOf(beats[i]);
@@ -378,6 +443,9 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
         long cnt = 0;
         for (long k = f; k < f2 && k < long(frames); k++, cnt++) e += rmsN[size_t(k)];
         res.beatEnergy[i] = cnt ? float(e / double(cnt)) : 0;
+        double el = 0;
+        for (long k = f; k < f2 && k < long(frames); k++) el += lowN[size_t(k)];
+        beatLowE[i] = cnt ? float(el / double(cnt)) : 0;
     }
     int phase = 0;
     {
@@ -387,8 +455,9 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
             // kick on the downbeat, snare/clap usually on beats 2 and 4
             for (size_t i = size_t(p); i < nb; i += 4) s += beatLow[i] - 0.4 * beatHigh[i];
             for (size_t i = size_t(p) + 1; i < nb; i += 4) s += 0.2 * beatHigh[i];
-            // energy changes (drops, breaks) land on bar starts
-            for (size_t i = size_t(p) + 4; i < nb; i += 4) s += 3.0 * std::abs(res.beatEnergy[i] - res.beatEnergy[i - 1]);
+            // drum / bass energy changes (drops, breaks) land on bar starts; percussive only,
+            // so vocals coming in on any beat don't vote
+            for (size_t i = size_t(p) + 4; i < nb; i += 4) s += 3.0 * std::abs(beatLowE[i] - beatLowE[i - 1]);
             if (s > best) best = s, phase = p;
         }
     }
@@ -433,6 +502,55 @@ Analysis analyze(std::vector<float> const& input, int inputRate) {
             res.onsets.push_back({double(i) / fps + frameOffset, v, lo / tot, hi / tot,
                                   midN[i], float(double(e - i) / fps)});
             last = i, any = true;
+        }
+    }
+
+    // ---- 8b. vocal / melody pool (harmonic part in the voice band) ---------------------
+    {
+        auto venv = onsetEnvelope(vocalFlux);
+        float hi = percentile(venv, 0.98);
+        if (hi < 1e-6f) hi = 1;
+        for (auto& v : venv) v = std::min(1.f, v / hi);
+        std::vector<float> vEn = vocalEnergy;
+        normalizeRange(vEn, 0.1, 0.97);
+        int w = std::max(2, int(0.06 * fps));
+        size_t minGap = size_t(std::max(1.0, 0.14 * fps)), last = 0;
+        bool any = false;
+        for (size_t i = 1; i + 1 < frames; i++) {
+            float v = venv[i];
+            if (v < 0.4f || vEn[i] < 0.25f) continue;
+            // a new note, not vibrato on a held one: voice energy must rise into it
+            if (i >= 3 && vocalEnergy[i] < 1.15f * vocalEnergy[i - 3]) continue;
+            bool peak = true;
+            for (int k = -w; k <= w && peak; k++) {
+                long j = long(i) + k;
+                if (k == 0 || j < 0 || j >= long(frames)) continue;
+                if (venv[size_t(j)] > v) peak = false;
+            }
+            if (!peak || (any && i - last < minGap)) continue;
+            // how long the note is held: voice energy stays above half of its level
+            float level = 0;
+            for (size_t k = i; k < std::min(frames, i + 4); k++) level = std::max(level, vocalEnergy[k]);
+            size_t e = i;
+            while (e + 1 < frames && e - i < size_t(3.0 * fps) && vocalEnergy[e + 1] > 0.5f * level) e++;
+            res.vocalOnsets.push_back({double(i) / fps + frameOffset, v, 0, 0, vEn[i], float(double(e - i) / fps)});
+            last = i, any = true;
+        }
+        res.beatVocal.assign(nb, 0);
+        for (size_t i = 0; i < nb; i++) {
+            long f0 = frameOf(beats[i]), f1 = frameOf(beats[i] + beatPeriodSec);
+            double sum = 0;
+            long c = 0;
+            for (long k = f0; k < f1 && k < long(frames); k++, c++) sum += vEn[size_t(k)];
+            res.beatVocal[i] = c ? float(sum / double(c)) : 0;
+        }
+        // phrases: runs of beats with clear voice / melody
+        for (size_t i = 0; i < nb;) {
+            if (res.beatVocal[i] < 0.45f) { i++; continue; }
+            size_t j = i;
+            while (j + 1 < nb && res.beatVocal[j + 1] >= 0.35f) j++;
+            if (j > i) res.vocalPhrases.push_back({beats[i], beats[j] + beatPeriodSec});
+            i = j + 1;
         }
     }
 

@@ -23,7 +23,11 @@ void Gen::planSegments() {
     std::vector<Seg> raw;
     for (auto& s : secs) {
         // calm parts are long; intense parts switch every 4 bars (sometimes 2) for surprise
-        int bars = s.level == 0 ? 16 : s.level == 1 ? 8 : (diff() >= 2 && rnd() < 0.5 ? (rnd() < 0.3 ? 2 : 4) : 8);
+        // how often the gamemode switches is a style trait (switch-ups vs long flowing parts)
+        double sw = G.switchRate;
+        int bars = s.level == 0 ? (sw > 0.75 ? 8 : 16)
+                 : s.level == 1 ? (rnd() < 0.6 * sw ? 4 : 8)
+                 : (diff() >= 2 && rnd() < 0.2 + 0.8 * sw ? (rnd() < 0.1 + 0.4 * sw ? 2 : 4) : 8);
         double maxLen = bars * 4 * P;
         int pieces = std::max(1, int(std::round((s.end - s.start) / maxLen)));
         double len = (s.end - s.start) / pieces;
@@ -45,6 +49,10 @@ void Gen::planSegments() {
     Mode prev = Mode::Cube, prev2 = Mode::Cube;
     for (size_t i = 0; i < segs.size(); i++) {
         auto& s = segs[i];
+        // every part gets its own variation of the level's style and two block tilesets
+        s.g = varyGenome(G, rng, 0.12);
+        s.tileset = pickTileset(s.g, rng);
+        s.tilesetAlt = pickTileset(s.g, rng);
         std::vector<std::pair<Mode, double>> opts;
         auto addOpt = [&](Mode m, double w) {
             if (i > 0 && m == prev) return;
@@ -56,11 +64,13 @@ void Gen::planSegments() {
             case 1:
                 addOpt(Mode::Cube, 2.0); addOpt(Mode::Ball, 1.0); addOpt(Mode::Ship, 1.0);
                 if (D.spider) addOpt(Mode::Spider, 0.8);
+                if (diff() >= 1) addOpt(Mode::Robot, 1.6 * s.g.robot);
                 break;
             case 2:
                 addOpt(Mode::Cube, 1.8); addOpt(Mode::Ball, 1.0); addOpt(Mode::Ship, 0.9);
                 if (D.spider) addOpt(Mode::Spider, 1.0);
                 if (D.wave) addOpt(Mode::Wave, 1.0);
+                if (diff() >= 1) addOpt(Mode::Robot, 1.4 * s.g.robot);
                 break;
             default:
                 addOpt(Mode::Cube, 1.5); addOpt(Mode::Ship, 0.7);
@@ -85,8 +95,9 @@ void Gen::planSegments() {
         int base = D.speedRank;
         int rank = base;
         if (diff() >= 1 && i > 0) {
-            if (s.level >= 3) rank = base + 1;
-            else if (s.level == 0 && segs[i - 1].level >= 2 && diff() >= 2) rank = base - 1;
+            double sv = s.g.speedVariety;
+            if (s.level >= 3 && rnd() < 0.3 + 0.7 * sv) rank = base + 1;
+            else if (s.level == 0 && segs[i - 1].level >= 2 && diff() >= 2 && rnd() < sv) rank = base - 1;
         }
         bool flyingMode = s.mode == Mode::Ship || s.mode == Mode::Wave;
         rank = std::clamp(rank, 0, flyingMode ? 3 : 4);
@@ -98,7 +109,7 @@ void Gen::planSegments() {
         // a mini wave climbs twice as fast: it must still be able to zigzag between eighths
         if (s.mini && s.mode == Mode::Wave && SPEED_UPS[rank] * 2 * P / 2 > 150) s.mini = false;
         s.gravity = flying && s.level >= 2 && diff() >= 2 && rnd() < 0.45;
-        s.mirror = i > 0 && s.drop && diff() >= 2 && rnd() < 0.3;
+        s.mirror = i > 0 && s.drop && diff() >= 2 && rnd() < 0.6 * s.g.mirror;
         s.style = rndInt(4);
         if (s.mode == Mode::Ball || s.mode == Mode::Spider) {
             static constexpr double heights[3] = {90, 120, 150};
@@ -113,7 +124,7 @@ void Gen::planSegments() {
     if (diff() >= 2) {
         for (size_t i = 1; i < segs.size(); i++) {
             auto& s = segs[i];
-            if (s.level < 3 || s.t1 - s.t0 < 15 * P || rnd() > 0.3) continue;
+            if (s.level < 3 || s.t1 - s.t0 < 15 * P || rnd() > 0.1 + 0.4 * G.speedVariety) continue;
             int cap = (s.mode == Mode::Ship || s.mode == Mode::Wave) ? 3 : 4;
             if (s.speedRank >= cap) continue;
             double mid = (s.t0 + s.t1) / 2, split = -1;
@@ -247,6 +258,7 @@ void Gen::spike(double x, double y, bool pointDown, int group) {
     auto& o = out.add(obj::Spike, x, y);
     if (pointDown) o.kv(key::Rotation, 180);
     o.group(group);
+    hazards[std::lround(x / 30)].push_back({x, y});
 }
 
 void Gen::portal(size_t i) {
@@ -262,6 +274,7 @@ void Gen::portal(size_t i) {
         case Mode::Ball: id = obj::PortalBall; break;
         case Mode::Wave: id = obj::PortalWave; break;
         case Mode::Spider: id = obj::PortalSpider; break;
+        case Mode::Robot: id = 745; break;
     }
     out.add(id, x + 15, 45);
 }
@@ -315,6 +328,12 @@ GenResult Gen::run() {
         beatIdx.push_back(i);
     }
 
+    {
+        auto mix = blendStyles(O.styleMask, rng);
+        G = mix.genome;
+        styleDesc = mix.description;
+        res.style = styleDesc;
+    }
     planSegments();
     buildTimeline();
     res.duration = segs.back().t1;
@@ -344,10 +363,12 @@ GenResult Gen::run() {
             case Mode::Ship: genShip(i); break;
             case Mode::Ball: genFlip(i, false); break;
             case Mode::Spider: genFlip(i, true); break;
+            case Mode::Robot: genRobot(i); break;
             case Mode::Wave: genWave(i); break;
         }
         portalEnd(i);
     }
+    design();
     if (O.effects) effects();
 
     res.objects = out.finish();
@@ -359,13 +380,13 @@ GenResult Gen::run() {
         if (!feat.empty()) feat += ", ";
         feat += name + " x" + std::to_string(n);
     }
-    char buf[640];
+    char buf[900];
     std::snprintf(
         buf, sizeof(buf),
-        "%s | %s | %zu parts (cube %d, ship %d, ball %d, wave %d, spider %d) | ~%d clicks | %d objects | "
-        "cube pattern space ~1e%.0f per bar",
-        A.summary().c_str(), difficultyName(O.difficulty), segs.size(), modeCount[0], modeCount[1],
-        modeCount[2], modeCount[3], modeCount[4], clicks, out.count, patternSpace
+        "%s | %s | style %s | %zu parts (cube %d, ship %d, ball %d, wave %d, spider %d, robot %d) | ~%d clicks | "
+        "%d objects | cube pattern space ~1e%.0f per bar",
+        A.summary().c_str(), difficultyName(O.difficulty), styleDesc.c_str(), segs.size(), modeCount[0], modeCount[1],
+        modeCount[2], modeCount[3], modeCount[4], modeCount[5], clicks, out.count, patternSpace
     );
     res.summary = buf;
     res.features = feat;

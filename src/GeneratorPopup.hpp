@@ -38,6 +38,9 @@ protected:
     void onReroll(cocos2d::CCObject*);
     void onOffset(cocos2d::CCObject* sender);
     void onGenerate(cocos2d::CCObject*);
+    void onStyles(cocos2d::CCObject*);
+    void onStyleToggle(cocos2d::CCObject* sender);
+    void onStylesDone(cocos2d::CCObject*);
 
     void checkDownload(float);
     void startDecode(float);
@@ -48,6 +51,7 @@ protected:
     void setSong(int songID);
     void refreshSongLabel();
     void refreshOptions();
+    void refreshStyles();
     void setStatus(std::string const& text, cocos2d::ccColor3B color = {255, 255, 255});
 
     struct Job {
@@ -67,6 +71,9 @@ protected:
     cocos2d::CCLabelBMFont* m_offsetLabel = nullptr;
     cocos2d::CCLabelBMFont* m_status = nullptr;
     std::vector<ButtonSprite*> m_diffSprites;
+    ButtonSprite* m_stylesSpr = nullptr;
+    cocos2d::CCLayer* m_stylePanel = nullptr;
+    std::vector<cocos2d::CCSprite*> m_styleChecks;
     std::shared_ptr<Job> m_job;
     geode::Ref<cocos2d::CCNode> m_songLayer = nullptr;
     bool m_busy = false;

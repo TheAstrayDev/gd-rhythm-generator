@@ -16,10 +16,23 @@ static struct {
     bool effects = true;
     int offsetMs = 0;
     uint32_t seed = 0;
+    uint32_t styleMask = 0; // ticked styles; none ticked = all of them
 } s_last;
 
 namespace {
 constexpr int TOUCH_PRIO = -500;
+struct StyleInfo { char const* name; char const* hint; };
+// order = rg::gen::StyleId (bit i of styleMask)
+constexpr StyleInfo STYLES[] = {
+    {"Classic", "RobTop look: grid tiles, glow, chains"},
+    {"Modern", "Outline blocks, moving entrances"},
+    {"Neon", "Coloured tiles drowned in glow, flashes"},
+    {"Tech", "Mech tiles, gears, ship gates, robot"},
+    {"Effects", "Shaders, camera moves, screen flips"},
+    {"Hardcore", "Fast switches, spam, speed changes"},
+    {"Chill", "Calm flow, few switches, soft fx"},
+};
+constexpr int STYLE_N = int(sizeof(STYLES) / sizeof(STYLES[0]));
 CCMenuItemSpriteExtra* textButton(char const* text, int width, char const* bg, float scale, CCObject* target, SEL_MenuHandler sel) {
     auto spr = ButtonSprite::create(text, width, true, "bigFont.fnt", bg, 28.f, scale);
     return CCMenuItemSpriteExtra::create(spr, target, sel);
@@ -89,9 +102,14 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     m_songLabel->setPosition({m_size.width / 2, m_size.height - 50});
     m_main->addChild(m_songLabel);
 
-    auto libBtn = textButton("Choose Song", 150, "GJ_button_02.png", 0.65f, this, menu_selector(GeneratorPopup::onLibrary));
-    libBtn->setPosition({m_size.width / 2, m_size.height - 80});
+    auto libBtn = textButton("Choose Song", 120, "GJ_button_02.png", 0.6f, this, menu_selector(GeneratorPopup::onLibrary));
+    libBtn->setPosition({m_size.width / 2 - 85, m_size.height - 80});
     m_menu->addChild(libBtn);
+
+    m_stylesSpr = ButtonSprite::create("Styles: All", 120, true, "bigFont.fnt", "GJ_button_03.png", 28.f, 0.6f);
+    auto stylesBtn = CCMenuItemSpriteExtra::create(m_stylesSpr, this, menu_selector(GeneratorPopup::onStyles));
+    stylesBtn->setPosition({m_size.width / 2 + 85, m_size.height - 80});
+    m_menu->addChild(stylesBtn);
 
     // --- difficulty ---------------------------------------------------------------------
     rgTrace("popup: difficulty row");
@@ -152,6 +170,7 @@ bool GeneratorPopup::init(LevelEditorLayer* editor) {
     m_main->addChild(m_status);
 
     refreshOptions();
+    refreshStyles();
     rgTrace("popup: refreshSongLabel");
     refreshSongLabel();
     setStatus("Choose a song and a difficulty, then press Generate");
@@ -180,6 +199,10 @@ void GeneratorPopup::keyBackClicked() {
 }
 
 void GeneratorPopup::onClose(CCObject*) {
+    if (m_stylePanel) {
+        onStylesDone(nullptr);
+        return;
+    }
     if (m_busy) return;
     this->unscheduleAllSelectors();
     this->setKeypadEnabled(false);
@@ -210,6 +233,117 @@ void GeneratorPopup::refreshOptions() {
     m_seedLabel->limitLabelWidth(140, 0.45f, 0.2f);
     m_offsetLabel->setString(fmt::format("Offset: {} ms", s_last.offsetMs).c_str());
     m_offsetLabel->limitLabelWidth(140, 0.45f, 0.2f);
+}
+
+// ---- style picker ------------------------------------------------------------------------
+// A panel over the window with a checkbox per style. The generator never copies a ticked
+// style: it draws random weights over them, blends their knobs and mutates the result, so
+// every level gets a new style made from the ticked ones.
+
+void GeneratorPopup::refreshStyles() {
+    int n = 0;
+    for (int i = 0; i < STYLE_N; i++) if (s_last.styleMask & (1u << i)) n++;
+    std::string text = n == 0 || n == STYLE_N ? "Styles: All"
+                     : n == 1 ? fmt::format("Style: {}", [&] {
+                           for (int i = 0; i < STYLE_N; i++) if (s_last.styleMask & (1u << i)) return STYLES[i].name;
+                           return "";
+                       }())
+                     : fmt::format("Styles: {} mixed", n);
+    if (m_stylesSpr) m_stylesSpr->setString(text.c_str());
+    auto cache = CCSpriteFrameCache::sharedSpriteFrameCache();
+    for (int i = 0; i < int(m_styleChecks.size()); i++) {
+        bool on = s_last.styleMask & (1u << i);
+        if (auto frame = cache->spriteFrameByName(on ? "GJ_checkOn_001.png" : "GJ_checkOff_001.png")) {
+            m_styleChecks[size_t(i)]->setDisplayFrame(frame);
+        }
+    }
+}
+
+void GeneratorPopup::onStyles(CCObject*) {
+    if (m_busy || m_stylePanel) return;
+    rgTrace("styles: open");
+    m_menu->setEnabled(false); // the panel covers the window; nothing below may react
+
+    CCSize ps(360.f, 250.f);
+    m_stylePanel = CCLayer::create();
+    m_stylePanel->ignoreAnchorPointForPosition(false);
+    m_stylePanel->setContentSize(ps);
+    m_stylePanel->setAnchorPoint({0.5f, 0.5f});
+    m_stylePanel->setPosition(m_size / 2);
+    m_main->addChild(m_stylePanel, 50);
+
+    auto bg = extension::CCScale9Sprite::create("GJ_square02.png");
+    bg->setContentSize(ps);
+    bg->setPosition(ps / 2);
+    m_stylePanel->addChild(bg);
+
+    auto title = CCLabelBMFont::create("Styles", "goldFont.fnt");
+    title->setScale(0.7f);
+    title->setPosition({ps.width / 2, ps.height - 18});
+    m_stylePanel->addChild(title);
+    auto sub = CCLabelBMFont::create("Tick any mix: every level blends them into a NEW style", "chatFont.fnt");
+    sub->setPosition({ps.width / 2, ps.height - 38});
+    sub->limitLabelWidth(ps.width - 30, 0.6f, 0.2f);
+    m_stylePanel->addChild(sub);
+
+    auto menu = CCMenu::create();
+    menu->ignoreAnchorPointForPosition(false);
+    menu->setContentSize(ps);
+    menu->setAnchorPoint({0, 0});
+    menu->setPosition({0, 0});
+    menu->setTouchPriority(TOUCH_PRIO - 3);
+    m_stylePanel->addChild(menu, 10);
+
+    m_styleChecks.clear();
+    for (int i = 0; i < STYLE_N; i++) {
+        int col = i < 4 ? 0 : 1, row = i < 4 ? i : i - 4;
+        float x = col == 0 ? 28.f : ps.width / 2 + 14.f;
+        float y = ps.height - 68 - row * 36.f;
+        auto check = CCSprite::createWithSpriteFrameName("GJ_checkOff_001.png");
+        check->setScale(0.6f);
+        auto btn = CCMenuItemSpriteExtra::create(check, this, menu_selector(GeneratorPopup::onStyleToggle));
+        btn->setTag(i);
+        btn->setPosition({x, y});
+        menu->addChild(btn);
+        m_styleChecks.push_back(check);
+
+        auto name = CCLabelBMFont::create(STYLES[i].name, "bigFont.fnt");
+        name->setAnchorPoint({0, 0.5f});
+        name->setScale(0.42f);
+        name->setPosition({x + 18, y + 6});
+        m_stylePanel->addChild(name);
+        auto hint = CCLabelBMFont::create(STYLES[i].hint, "chatFont.fnt");
+        hint->setAnchorPoint({0, 0.5f});
+        hint->setPosition({x + 18, y - 8});
+        hint->limitLabelWidth(ps.width / 2 - 52, 0.5f, 0.2f);
+        hint->setColor({200, 220, 255});
+        m_stylePanel->addChild(hint);
+    }
+    auto none = CCLabelBMFont::create("None ticked = all styles", "chatFont.fnt");
+    none->setScale(0.55f);
+    none->setColor({200, 200, 200});
+    none->setPosition({ps.width * 0.75f - 10, ps.height - 68 - 3 * 36.f});
+    m_stylePanel->addChild(none);
+
+    auto done = textButton("Done", 70, "GJ_button_01.png", 0.6f, this, menu_selector(GeneratorPopup::onStylesDone));
+    done->setPosition({ps.width / 2, 22});
+    menu->addChild(done);
+    refreshStyles();
+}
+
+void GeneratorPopup::onStyleToggle(CCObject* sender) {
+    s_last.styleMask ^= 1u << sender->getTag();
+    refreshStyles();
+}
+
+void GeneratorPopup::onStylesDone(CCObject*) {
+    if (!m_stylePanel) return;
+    rgTrace("styles: close");
+    m_stylePanel->removeFromParentAndCleanup(true);
+    m_stylePanel = nullptr;
+    m_styleChecks.clear();
+    m_menu->setEnabled(true);
+    refreshStyles();
 }
 
 void GeneratorPopup::refreshSongLabel() {
@@ -356,6 +490,7 @@ void GeneratorPopup::startDecode(float) {
     opt.difficulty = rg::Difficulty(s_last.difficulty);
     opt.effects = s_last.effects;
     opt.seed = s_last.seed;
+    opt.styleMask = s_last.styleMask;
     opt.syncOffset = s_last.offsetMs / 1000.0;
     opt.songOffset = m_editor->m_levelSettings ? m_editor->m_levelSettings->m_songOffset : 0.0;
     opt.speedPortalsOnly = true;

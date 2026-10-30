@@ -136,7 +136,13 @@ void Gen::genShip(size_t si) {
         }
         if (mini != s.mini) p.sizes.push_back({b - 2 * P, s.mini});
         if (grav) p.gravs.push_back({b - 2 * P, false});
+        double gateBias = 0;
+        for (auto& c : ch) {
+            Corr k = T[size_t(c.tpl)].corr;
+            if (k == CGates || k == CTeeth || k == CSqueeze) gateBias += 1;
+        }
         score = 3.0 * usedT.size() - 4.0 * repeats + 2.0 * sync - 1.5 * clamp + 3.0 * bins.size()
+                + 3.0 * (s.g.shipGates - 0.5) * gateBias
                 + 2.0 * std::min<size_t>(p.sizes.size(), 4) + 2.0 * std::min<size_t>(p.gravs.size(), 3);
         p.score = score;
         return p;

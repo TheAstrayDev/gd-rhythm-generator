@@ -153,10 +153,10 @@ void Gen::genFlip(size_t si, bool spider) {
         double F = heightAt(best.floor, t), C = heightAt(best.ceil, t);
         if (F > 0) {
             int g = chunkGroup(si, t, x, false);
-            for (double y = 15; y < F; y += 30) out.add(obj::Block, x, y).group(g);
+            for (double y = 15; y < F; y += 30) solidBlock(x, y, g, si);
         }
-        out.add(obj::Block, x, C + 15);
-        out.add(obj::Block, x, C + 45);
+        solidBlock(x, C + 15, 0, si);
+        solidBlock(x, C + 45, 0, si);
     }
     auto changeNear = [&](std::vector<Step> const& st, double x) {
         for (size_t i = 1; i < st.size(); i++) if (std::abs(tl.x(st[i].t) - x) < 35) return true;
@@ -176,7 +176,7 @@ void Gen::genFlip(size_t si, bool spider) {
             double surf = heightAt(steps, t);
             int g = chunkGroup(si, hz.t0, x, hz.ceiling);
             if (hz.style == HBlocks) {
-                out.add(obj::Block, x, hz.ceiling ? surf - 15 : surf + 15).group(g);
+                solidBlock(x, hz.ceiling ? surf - 15 : surf + 15, g, si);
             } else {
                 spike(x, hz.ceiling ? surf - 15 : surf + 15, hz.ceiling, g);
             }

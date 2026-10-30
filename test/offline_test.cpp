@@ -56,6 +56,31 @@ static std::vector<float> synth(double bpm, double phase, int sr, double& dur) {
             }
         }
     }
+    // a "singer": held harmonic notes with vibrato, syllables deliberately OFF the beat grid,
+    // during the build and both drops - the beat tracker must ignore them
+    {
+        double vbar0[] = {16, 40, 64}, vbars[] = {8, 16, 16};
+        std::uniform_real_distribution<double> u(0, 1);
+        static const double scale[] = {220, 246.9, 261.6, 293.7, 329.6, 349.2, 392};
+        for (int part = 0; part < 3; part++) {
+            double t = phase + vbar0[part] * 4 * beat + 0.13;
+            double end = phase + (vbar0[part] + vbars[part]) * 4 * beat;
+            while (t < end) {
+                double len = 0.18 + u(rng) * 0.6;
+                double f0 = scale[int(u(rng) * 7)];
+                size_t s0 = size_t(t * sr), s1 = std::min(x.size(), size_t((t + len) * sr));
+                for (size_t i = s0; i < s1; i++) {
+                    double tt = double(i - s0) / sr;
+                    double env = std::min(1.0, tt / 0.03) * std::min(1.0, (len - tt) / 0.05);
+                    double f = f0 * (1 + 0.01 * std::sin(2 * M_PI * 5.5 * tt));
+                    double v = 0;
+                    for (int h = 1; h <= 6; h++) v += std::sin(2 * M_PI * f * h * tt) / h;
+                    x[i] += float(0.12 * env * v);
+                }
+                t += len + 0.05 + u(rng) * 0.25;
+            }
+        }
+    }
     for (auto& v : x) v += 0.01f * n(rng);
     return x;
 }
@@ -284,7 +309,10 @@ int main(int argc, char** argv) {
         GenOptions o;
         o.difficulty = Difficulty(argc > 3 ? std::atoi(argv[3]) : 2);
         o.seed = argc > 4 ? uint32_t(std::atoi(argv[4])) : 1;
-        std::ofstream(argv[2]) << generate(a, o).objects;
+        o.styleMask = argc > 5 ? uint32_t(std::atoi(argv[5])) : 0;
+        auto r = generate(a, o);
+        std::printf("\n[file] %s\n", r.summary.c_str());
+        std::ofstream(argv[2]) << r.objects;
     }
     std::printf("\n%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;

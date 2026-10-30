@@ -187,7 +187,14 @@ void Gen::genWave(size_t si) {
         mean /= std::max<size_t>(1, amps.size());
         for (double v2 : amps) var += (v2 - mean) * (v2 - mean);
         var = std::sqrt(var / std::max<size_t>(1, amps.size()));
+        // style: a "spam" genome likes sixteenth templates and tight / teeth corridors
+        double spamBias = 0;
+        for (auto& c : ch) {
+            if (WAVE_TPL[c.tpl].needs16 || c.gap == GTight || c.gap == GTeeth) spamBias += 1;
+            if (c.gap == GWide) spamBias -= 0.5;
+        }
         w.score = 3.0 * used_.size() + 1.5 * gapsUsed.size() - 4.0 * repeats + 1.5 * sync + var / 8.0
+                  + 3.0 * (s.g.waveSpam - 0.5) * spamBias
                   - 3.0 * w.repairs - 2.5 * std::max(0.0, floorIdle - slideBonus * 2 * P)
                   + 2.0 * std::min<size_t>(w.sizes.size(), 4) + 2.0 * std::min<size_t>(w.gravs.size(), 3);
         return w;

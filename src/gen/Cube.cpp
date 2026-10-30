@@ -376,13 +376,19 @@ void Gen::genCube(size_t si) {
     int poolSize = dif == 0 ? 8 : 24;
     int improveRounds = dif == 0 ? 15 : 60;
 
+    // intent odds follow the part's style genome; at 0.5 every knob gives the base odds
+    auto& sg = s.g;
+    double wIn[6] = {0.34, 0.18 * (0.5 + sg.orbs), 0.14 * (0.5 + sg.pads), 0.10 * (0.5 + sg.orbs),
+                     0.12 * (0.5 + sg.platforms), 0.12 * (0.5 + sg.planeFlips)};
+    double wSum = 0;
+    for (double w : wIn) wSum += w;
     auto randomIntent = [&]() {
-        double r = rnd();
-        if (r < 0.34) return IJump;
-        if (r < 0.52) return IOrb;
-        if (r < 0.66) return IPad;
-        if (r < 0.76) return IDash;
-        if (r < 0.88) return IDrop;
+        double r = rnd() * wSum;
+        static constexpr Intent order[6] = {IJump, IOrb, IPad, IDash, IDrop, IFlip};
+        for (int k = 0; k < 6; k++) {
+            if (r < wIn[k]) return order[k];
+            r -= wIn[k];
+        }
         return IFlip;
     };
     auto randomPlan = [&](size_t n) {
@@ -502,8 +508,8 @@ void Gen::genCube(size_t si) {
         if (c.x1 <= c.x0) continue;
         for (double x = c.x0; x <= c.x1; x += 30) {
             int g = chunkGroup(si, s.t0 + (x - tl.x(s.t0)) / v, x, true);
-            out.add(obj::Block, x, CEIL_Y + 15).group(g);
-            out.add(obj::Block, x, CEIL_Y + 45).group(g);
+            solidBlock(x, CEIL_Y + 15, g, si);
+            solidBlock(x, CEIL_Y + 45, g, si);
         }
         used("ceiling plane");
     }
@@ -518,8 +524,7 @@ void Gen::genCube(size_t si) {
     for (auto& p : S.pillars) {
         for (double c = p.x0 + 15; c - 15 < p.x1; c += 30) {
             for (double y = 15; y < p.h; y += 30) {
-                out.add(obj::Block, c, worldY(y, p.plane))
-                    .group(chunkGroup(si, p.t, c, p.plane == Ceil));
+                solidBlock(c, worldY(y, p.plane), chunkGroup(si, p.t, c, p.plane == Ceil), si);
             }
         }
         used(p.plane == Ceil ? "hanging platform" : p.h > 60 ? "high plateau" : p.h > 30 ? "tower" : "platform");
@@ -599,7 +604,7 @@ void Gen::genCube(size_t si) {
             if (ob == ObMixed) ob = rnd() < 0.5 ? ObSpikes : ObBlocks;
             if (ob == ObSpikeBlock && safe(c, 30 + SPIKE_TOP, 15)) {
                 int g = chunkGroup(si, tMid, c, pl == Ceil);
-                out.add(obj::Block, c, worldY(15, pl)).group(g);
+                solidBlock(c, worldY(15, pl), g, si);
                 spike(c, worldY(45, pl), pl == Ceil, g);
                 used("spike on block");
                 continue;
@@ -609,8 +614,7 @@ void Gen::genCube(size_t si) {
                 for (int k = 0; k < nb; k++) {
                     double bx = c + (k - (nb - 1) / 2.0) * 30;
                     if (!safe(bx, 30, 15)) continue;
-                    out.add(obj::Block, bx, worldY(15, pl))
-                        .group(chunkGroup(si, tMid, bx, pl == Ceil));
+                    solidBlock(bx, worldY(15, pl), chunkGroup(si, tMid, bx, pl == Ceil), si);
                 }
                 used("block obstacle");
                 continue;
